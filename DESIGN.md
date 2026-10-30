@@ -158,30 +158,36 @@ serves it. Draft issue for `catduckgnaf/print-handy`:
 ## 5. Parity matrix — the Moonraker integration bar
 
 Reference: **marcolivierarsenault/moonraker-home-assistant** (HACS,
-domain `moonraker`, `local_polling`, client lib `pymoonraker`), read
-2026-10-30. It talks to each Klipper printer's Moonraker directly
-(websocket subscription + REST). Ours must deliver the equivalent for
-**every** printer Print Handy manages — Klipper, OctoPrint, Bambu,
-PrusaLink, SDCP, stock Flashforge — from the one Print Handy connection.
+domain `moonraker`, `local_polling`, client lib `moonraker-api==4.0.0`;
+5,516 installs per HA analytics), code-read 2026-10-30 at its 1.13.4
+head. Despite the websocket transport it **never subscribes** — it
+polls with JSON-RPC `printer.objects.query` calls over one persistent
+socket, 30 s at idle and a dynamic 2 s while printing. (Its README
+currently carries a "currently unmaintained" banner even though
+releases continued into October 2026.) Ours must deliver the
+equivalent for **every** printer Print Handy manages — Klipper,
+OctoPrint, Bambu, PrusaLink, SDCP, stock Flashforge — from the one
+Print Handy connection.
 
 | Feature / entity | Moonraker integration | Print Handy integration |
 |---|---|---|
 | Printer state sensor | `sensor.<p>_current_state` from print_stats.state | Phase 2 (gap §4); state names already align (standby/printing/paused/complete/error) |
-| Progress | display_status.progress ×100, % measurement | Phase 2 from normalized `progress` |
-| ETA | timestamp sensor; max of slicer/file/flow blends from metadata estimates + elapsed | Phase 2; needs duration/estimate fields in §4 endpoint (Bambu already has remaining_min) |
-| Print duration / time left | print_duration, total_duration sensors | Phase 2 (same dependency) |
-| Filename | sensor + attribute on state sensor | Phase 2 |
-| Thumbnail | state sensor attribute plus a dedicated `Thumbnail` camera entity (`PreviewCamera`, served from Moonraker's file store, image only while printing); webcam is a separate MJPEG camera entity | Phase 2/3; needs thumbnail route (§4); ship both the attribute and an image/camera entity |
-| Nozzle / bed temps + targets | sensors incl. target sensors; **writable number entities for targets** | Phase 2 read-only; writable targets = phase 3 control scope |
-| Chamber temp, fan speeds, speed factor, flow, extruder count temps | sensors from heater_generic/sensor/fan objects | Only where a Print Handy adapter exposes them; today: not in the normalized shape → adapter-level extension, later phase |
-| Current / total layer | display_status info + metadata object count | Phase 2 where provided (Bambu yes; Klipper adapters would need print_stats.info/metadata surfaced) |
-| Filament used / weight, spool weight | sensors (filament_used, Spoolman-linked spool weight when configured) | Print Handy knows Spoolman deeply; phase 2 candidate via the same endpoint (spool id/weight per printer) |
-| Job queue count / list | sensors from Moonraker job queue | Print Handy has no cross-vendor queue concept today → out of scope until it does |
+| Progress | file-relative (Mainsail-style: file_position between the file's gcode start/end bytes), falling back to display_status.progress; % sensor | Phase 2 from normalized `progress` |
+| ETA | timestamp sensor: now + projected time left, where the projected total uses a "calculated %" averaging raw progress and filament-used fraction; slicer estimates are separate, unblended sensors | Phase 2; needs duration/estimate fields in §4 endpoint (Bambu already has remaining_min) |
+| Print duration / time left | projected-total, time-left, print_duration and slicer-estimate duration sensors | Phase 2 (same dependency) |
+| Filename | sensor, blanked when not printing (as are most job sensors) | Phase 2 |
+| Thumbnail | dedicated `Thumbnail` camera entity (HTTP download from Moonraker's file store, image only while printing); webcam is a separate MJPEG camera entity per `server.webcams.list` | Phase 2/3; needs thumbnail route (§4); ship an image/camera entity |
+| Nozzle / bed temps + targets | Temperature + Power sensors per heater object; **targets exist only as writable Number entities** (via G-code), there are no target sensors | Phase 2 read-only temps; writable targets = phase 3 control scope |
+| Chamber temp, fan speeds, speed factor, toolhead position, MCU/system stats | fully object-discovered sensors/numbers from heater_generic, temperature_sensor, fan, gcode_move, mcu and system objects; plus LED lights, output-pin switches/numbers, Moonraker power-device switches, one button per Klipper macro, host-service and machine-update entities | Only where a Print Handy adapter exposes the underlying data; today the normalized shape carries none of it → adapter-level extensions, later phases. Print Handy's own power/light story runs through HA itself, so power-device and LED parity is deliberately not chased |
+| Current / total layer | print_stats.info, then virtual_sdcard, then computed from file metadata (object/first-layer height) | Phase 2 where provided (Bambu yes; Klipper adapters would need print_stats.info/metadata surfaced) |
+| Filament used / spool | filament_used sensor + history totals; Spoolman support is **only a Spool ID sensor** — no name, material or remaining weight | Print Handy knows Spoolman deeply, so the phase 2 Spool sensor (name + color/type/remaining attributes) **exceeds** this bar |
+| Job queue count / list | Queue State + Jobs-in-queue sensors, Start-queue button; no per-job control | Print Handy has no cross-vendor queue concept today → out of scope until it does |
+| Exclude object | **not supported** (never queried) | Not in the bar; Print Handy tracks objects from slicing, so this is a possible phase 3 differentiator, not parity |
 | Pause / Resume / Cancel buttons | buttons → /printer/print/* | Phase 3, gated on a Print Handy control API (§3.2) |
 | Emergency stop, firmware/server restart buttons | buttons | Phase 3 discussion; Print Handy's confirm-first posture may keep E-stop chat-side |
 | Send G-code | `moonraker.send_gcode` service | Phase 3 at earliest; same gate |
 | Camera | camera entity from Moonraker webcam config (snapshot/stream URLs) | Roster rows already carry `camera_snapshot_url` where configured; a camera platform is feasible in phase 2 for those printers |
-| Config flow | host, port, optional API key, TLS; options for print/queue polling rates | URL + token (§2); options: scan interval (dual-rate in phase 2) |
+| Config flow | host, port (7125), optional API key (32 chars), TLS, printer name; options: polling rate, camera/thumbnail ports, and a "quiet unreachable" mode for printers on smart plugs; no discovery, no reconfigure flow, no unique id | URL + token (§2), unique id set, reauth flow included; options: scan interval (dual-rate in phase 2) |
 | Multiple printers | one config entry per printer (per Moonraker) | **Better:** one entry surfaces the whole roster as separate devices |
 
 OctoPrint core integration (home-assistant/core `octoprint`), read on
