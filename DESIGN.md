@@ -325,8 +325,8 @@ token header and URL quoting, 404-as-unavailable, and the bulk poll's
 per-printer failure tolerance with 401 propagation).
 GitHub CI on the shipped 0.1.0 head: **HACS validation, hassfest, Lint
 (ruff) and Python testing all SUCCESS** (the test job installs the real
-pytest-homeassistant-custom-component harness on Python 3.14); the
-0.2.0 head is verified the same way before release.
+pytest-homeassistant-custom-component harness on Python 3.14). The
+0.2.0 code head (`30ae154`) verified the same way: **all four SUCCESS**.
 **Not yet done:** a live load in a real Home Assistant — the first live
 check is installing the integration in catduck's HA from the HACS
 custom repository and confirming the hub + printer devices appear with
