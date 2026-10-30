@@ -8,6 +8,7 @@ installs the real test harness for the HA-level tests.
 """
 
 import enum
+import importlib.util
 import sys
 import types
 from pathlib import Path
@@ -23,10 +24,12 @@ def _ensure_package(name: str, path: Path) -> None:
         sys.modules[name] = module
 
 
-_ensure_package("custom_components", ROOT / "custom_components")
-_ensure_package("custom_components.print_handy", COMPONENT_DIR)
-
-if "homeassistant" not in sys.modules:
+if importlib.util.find_spec("homeassistant") is None:
+    # No Home Assistant installed (plain local run): register the package
+    # by path and stub the one HA name const.py needs. With HA installed
+    # (CI), leave all loading to the real test harness.
+    _ensure_package("custom_components", ROOT / "custom_components")
+    _ensure_package("custom_components.print_handy", COMPONENT_DIR)
     ha = types.ModuleType("homeassistant")
     ha.__path__ = []
     const = types.ModuleType("homeassistant.const")
