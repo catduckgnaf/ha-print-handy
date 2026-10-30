@@ -1,11 +1,11 @@
 # Design — Print Handy for Home Assistant
 
-Status: 0.1.0 shipped as a read-only health/roster integration. This document
-records what Print Handy actually exposes today (verified against its source
-at 2.2.1, main `93b5144`), the transport decision that follows from it, the
-entity model, and the parity bar set by the existing Moonraker integration —
-including the one gap that must close in Print Handy itself before the
-job-level entities can exist.
+Status: 0.2.0 shipped the phase-2 job-level entities, built on the
+per-printer status endpoint that landed in Print Handy (issue #664, PR
+#667). This document records what Print Handy actually exposes (verified
+against its source at 2.2.1, main `93b5144`, plus the merged #667 endpoint),
+the transport decision that follows from it, the entity model, and the
+parity bar set by the existing Moonraker integration.
 
 ## 1. What Print Handy exposes today (Stage 1 recon)
 
@@ -34,15 +34,26 @@ session cookie exists for browsers. The Web UI is off by default
 (`[webui] enabled = false`, port 0, host 127.0.0.1); a deployment must
 enable it for this integration to connect.
 
-**Critical content limit:** the snapshot carries **no live print data at
-all** — no per-printer print state, progress, temperatures, ETA or current
-file, for any printer. What it does carry per printer is identity and
-health: the roster (`printers[]`: id, name, model, vendor, connection,
+**Critical content limit (0.1.0):** the snapshot carries **no live print
+data at all** — no per-printer print state, progress, temperatures, ETA or
+current file, for any printer. What it does carry per printer is identity
+and health: the roster (`printers[]`: id, name, model, vendor, connection,
 default flag, non-secret endpoints) and listener health
 (`listener.printers.<id>` = `{required, ok, reason}` on multi-printer
 instances; the section's own `{required, ok, reason}` on single-printer
 ones), plus instance health (bot heartbeat, Spoolman reachability, doctor
-rows). That is exactly what 0.1.0 exposes.
+rows). That is exactly what 0.1.0 exposed.
+
+**The endpoint that closed the gap (§4):** `GET /api/printers/<id>/status`
+(same `X-WebUI-Token` auth) returns the roster identity plus a `status`
+object holding the adapter's normalized status verbatim: the core fields
+of §1.3 plus, where the adapter provides them, `hotend_target_c`,
+`bed_target_c`, `remaining_min`, `layer`, a total-layer count (Bambu:
+`total_layer`; Elegoo SDCP: `total_layers`), and vendor extras (Bambu:
+`ams`, `hms_errors`, `print_error_text`, `gcode_state`). An unknown id is
+a 404; a known printer whose live read fails answers 200 with
+`status.state == "unavailable"` and a `detail`. 0.2.0 polls it once per
+roster printer per update, alongside the snapshot.
 
 ### 1.2 MQTT: event notifications only
 
@@ -84,8 +95,9 @@ automations); this integration does not depend on it, because its payloads
 carry no state and are not retained.
 
 Polling cadence: 30 s default, user-adjustable (10–3600 s) in options.
-When the phase-2 status endpoint lands, adopt the Moonraker integration's
-dual-rate pattern (fast while printing, slow while idle).
+The Moonraker integration's dual-rate pattern (fast while printing, slow
+while idle) remains a planned refinement — 0.2.0 keeps the single
+configured interval for snapshot and per-printer polls alike.
 
 Config flow: the user enters the **Web UI URL** and the **access token**
 (optional, loopback no-token installs only). Validation performs one
@@ -115,27 +127,70 @@ model = model key, via_device = hub):
 | Online | binary_sensor (connectivity) | listener row `ok` (None = unknown when no listener is required) |
 | Connection | sensor (diagnostic) | roster `connection`; attributes: model, vendor, default, listener_required, listener_reason |
 
-### 3.2 Planned when the gap closes (phase 2, per printer)
+### 3.2 Shipped in 0.2.0 (phase 2, per printer, from the §4 endpoint)
 
-Print state (enum sensor with `filename`, `thumbnail`, `start_time`,
-`end_time`, `duration` attributes — the last three make generic timer
-cards work without glue), Progress % (measurement), ETA (timestamp
-device class), Start time (timestamp), Print duration, Time remaining,
-Nozzle temperature + target, Bed temperature + target, Current layer /
-Total layers where the adapter provides them, Printing and
-Printing-error binary sensors, a thumbnail image entity, a camera
-entity where the roster carries a snapshot URL, and a Spool sensor
-(state = filament name; attributes = color, type, remaining, spool id)
-following the Bambu AMS pattern. Buttons Pause / Resume / Cancel only
-when a control API exists (phase 3) — Print Handy's chat-confirm safety
-posture means the API addition needs its own guard design; this
-integration will not invent endpoints or bypass it.
+Fixed suffix vocabulary (entity ids end in the key; documented in the
+README): `current_state`, `print_progress`, `filename`,
+`nozzle_temperature`, `bed_temperature`, `nozzle_target_temperature`,
+`bed_target_temperature`, `estimated_finish_time`, `time_remaining`,
+`current_layer`, `total_layers`, `filament`, plus binary sensors
+`printing` and `printing_error` — alongside 0.1.0's `online` and
+`connection`, which are unchanged.
 
-## 4. The gap, precisely (follow-up for Print Handy itself — draft)
+| Entity | Type | Source (endpoint `status`) |
+|---|---|---|
+| Current state | sensor (enum) | `state`, guarded to the known states + `unavailable`; attributes: `filename`, `detail` |
+| Print progress | sensor (%, measurement) | `progress` (0..1) × 100 |
+| Filename | sensor | `filename` (blank → no state) |
+| Nozzle / Bed temperature | sensor (temperature, measurement) | `hotend_c` / `bed_c` |
+| Nozzle / Bed target temperature | sensor (temperature, measurement) | `hotend_target_c` / `bed_target_c` — created only when the first poll carries the field |
+| Estimated finish time | sensor (timestamp) | now + `remaining_min`; created only when reported |
+| Time remaining | sensor (duration, minutes) | `remaining_min`; same gating |
+| Current layer / Total layers | sensor (measurement) | `layer` / `total_layer` or `total_layers`; same gating |
+| Filament | sensor | Bambu `ams`: state = active tray's name (else material); attributes: material, color, remaining_pct, slot, unit, full tray list, external spool, filament_backup. Created only when a tray/spool is loaded |
+| Printing | binary sensor (running) | `state == "printing"` |
+| Printing error | binary sensor (problem) | `state == "error"` |
 
-Nothing in this repo can manufacture the phase-2 entities: the data
-exists inside Print Handy (adapter `normalize_status`) but no HTTP route
-serves it. Draft issue for `catduckgnaf/print-handy`:
+Deviations from the original phase-2 sketch, each forced by what the
+endpoint genuinely sends (named here, not silently dropped):
+
+- **No start-time, print-duration or end-time values, and no
+  `start_time`/`end_time`/`duration` attributes on the state sensor** —
+  the normalized status carries no start timestamp or elapsed time, so
+  there is nothing truthful to publish. Timer cards get the ETA
+  timestamp and the remaining-duration sensor instead.
+- **Targets are read-only sensors, not numbers** — the endpoint is
+  read-only; writable targets are phase-3 control scope (the Moonraker
+  integration's target numbers write G-code).
+- **The Spool sensor shipped as the AMS Filament sensor above, not a
+  Spoolman sensor** — the endpoint carries no Spoolman assignment data
+  at all (no spool id, filament name or remaining weight from
+  Spoolman); what it does carry is the printer-reported AMS block, so
+  the sensor is built on that, following the same grouped-attribute
+  pattern. A true Spoolman spool sensor needs Print Handy to add spool
+  assignment fields to the endpoint.
+- **No thumbnail image entity** — deferred on Print Handy #664: no
+  per-printer thumbnail source exists yet.
+- **No camera entity** — the design's conditional ("where the roster
+  carries a snapshot URL") is not wired: the 0.1.0 model does not parse
+  a camera field from the roster, and camera support was outside the
+  0.2.0 scope. Revisit with the thumbnail work.
+
+Buttons Pause / Resume / Cancel only when a control API exists
+(phase 3) — Print Handy's chat-confirm safety posture means the API
+addition needs its own guard design; this integration will not invent
+endpoints or bypass it.
+
+## 4. The gap, precisely — closed, except the thumbnail
+
+Nothing in this repo could manufacture the phase-2 entities: the data
+existed inside Print Handy (adapter `normalize_status`) but no HTTP
+route served it. The draft issue below was filed as Print Handy #664
+and implemented by Print Handy PR #667 (`GET /api/printers/<id>/status`,
+§1.1); 0.2.0 is built on it. The one part that remains open on the
+Print Handy side is the **job thumbnail route** — no per-printer
+thumbnail source exists yet (deferred on #664). Original draft, kept
+for the record:
 
 > **Web UI API: per-printer live status endpoint**
 > The Web UI status snapshot (`GET /api/status`) carries roster identity
@@ -171,22 +226,22 @@ Print Handy connection.
 
 | Feature / entity | Moonraker integration | Print Handy integration |
 |---|---|---|
-| Printer state sensor | `sensor.<p>_current_state` from print_stats.state | Phase 2 (gap §4); state names already align (standby/printing/paused/complete/error) |
-| Progress | file-relative (Mainsail-style: file_position between the file's gcode start/end bytes), falling back to display_status.progress; % sensor | Phase 2 from normalized `progress` |
-| ETA | timestamp sensor: now + projected time left, where the projected total uses a "calculated %" averaging raw progress and filament-used fraction; slicer estimates are separate, unblended sensors | Phase 2; needs duration/estimate fields in §4 endpoint (Bambu already has remaining_min) |
-| Print duration / time left | projected-total, time-left, print_duration and slicer-estimate duration sensors | Phase 2 (same dependency) |
-| Filename | sensor, blanked when not printing (as are most job sensors) | Phase 2 |
-| Thumbnail | dedicated `Thumbnail` camera entity (HTTP download from Moonraker's file store, image only while printing); webcam is a separate MJPEG camera entity per `server.webcams.list` | Phase 2/3; needs thumbnail route (§4); ship an image/camera entity |
-| Nozzle / bed temps + targets | Temperature + Power sensors per heater object; **targets exist only as writable Number entities** (via G-code), there are no target sensors | Phase 2 read-only temps; writable targets = phase 3 control scope |
+| Printer state sensor | `sensor.<p>_current_state` from print_stats.state | Shipped 0.2.0: `_current_state` enum sensor, incl. the endpoint's `unavailable` |
+| Progress | file-relative (Mainsail-style: file_position between the file's gcode start/end bytes), falling back to display_status.progress; % sensor | Shipped 0.2.0: `_print_progress` % sensor from normalized `progress` (the endpoint's figure is already the adapter's best progress) |
+| ETA | timestamp sensor: now + projected time left, where the projected total uses a "calculated %" averaging raw progress and filament-used fraction; slicer estimates are separate, unblended sensors | Shipped 0.2.0 where `remaining_min` is reported (Bambu, SDCP, PrusaLink): `_estimated_finish_time` = now + remaining. No calculated-% blend and no slicer-estimate sensors — the endpoint carries neither filament-used nor slicer estimates to blend |
+| Print duration / time left | projected-total, time-left, print_duration and slicer-estimate duration sensors | Time remaining shipped 0.2.0 (`_time_remaining` duration sensor). Projected-total, elapsed print-duration and slicer-estimate sensors NOT shipped — the endpoint carries no elapsed time or slicer estimate |
+| Filename | sensor, blanked when not printing (as are most job sensors) | Shipped 0.2.0: `_filename` sensor (blank filename reads as no state) |
+| Thumbnail | dedicated `Thumbnail` camera entity (HTTP download from Moonraker's file store, image only while printing); webcam is a separate MJPEG camera entity per `server.webcams.list` | Not shipped — thumbnail route deferred on Print Handy #664 (no per-printer source exists) |
+| Nozzle / bed temps + targets | Temperature + Power sensors per heater object; **targets exist only as writable Number entities** (via G-code), there are no target sensors | Shipped 0.2.0: actual + target temperature sensors (read-only, so here targets ARE sensors — the inverse of Moonraker); writable targets = phase 3 control scope |
 | Chamber temp, fan speeds, speed factor, toolhead position, MCU/system stats | fully object-discovered sensors/numbers from heater_generic, temperature_sensor, fan, gcode_move, mcu and system objects; plus LED lights, output-pin switches/numbers, Moonraker power-device switches, one button per Klipper macro, host-service and machine-update entities | Only where a Print Handy adapter exposes the underlying data; today the normalized shape carries none of it → adapter-level extensions, later phases. Print Handy's own power/light story runs through HA itself, so power-device and LED parity is deliberately not chased |
-| Current / total layer | print_stats.info, then virtual_sdcard, then computed from file metadata (object/first-layer height) | Phase 2 where provided (Bambu yes; Klipper adapters would need print_stats.info/metadata surfaced) |
-| Filament used / spool | filament_used sensor + history totals; Spoolman support is **only a Spool ID sensor** — no name, material or remaining weight | Print Handy knows Spoolman deeply, so the phase 2 Spool sensor (name + color/type/remaining attributes) **exceeds** this bar |
+| Current / total layer | print_stats.info, then virtual_sdcard, then computed from file metadata (object/first-layer height) | Shipped 0.2.0 where provided (Bambu, Elegoo SDCP); Klipper-family normalized status still surfaces neither, so those printers get no layer sensors |
+| Filament used / spool | filament_used sensor + history totals; Spoolman support is **only a Spool ID sensor** — no name, material or remaining weight | Shipped 0.2.0 as the AMS Filament sensor from the printer-reported `ams` block (name + color/material/remaining_pct attributes, full tray list) — matches this bar's shape with richer data. No filament-used sensor and no Spoolman spool data: the endpoint carries neither a filament-used figure nor any Spoolman assignment, so the Spoolman-depth sensor (spool id, remaining weight) awaits Print Handy endpoint fields |
 | Job queue count / list | Queue State + Jobs-in-queue sensors, Start-queue button; no per-job control | Print Handy has no cross-vendor queue concept today → out of scope until it does |
 | Exclude object | **not supported** (never queried) | Not in the bar; Print Handy tracks objects from slicing, so this is a possible phase 3 differentiator, not parity |
 | Pause / Resume / Cancel buttons | buttons → /printer/print/* | Phase 3, gated on a Print Handy control API (§3.2) |
 | Emergency stop, firmware/server restart buttons | buttons | Phase 3 discussion; Print Handy's confirm-first posture may keep E-stop chat-side |
 | Send G-code | `moonraker.send_gcode` service | Phase 3 at earliest; same gate |
-| Camera | camera entity from Moonraker webcam config (snapshot/stream URLs) | Roster rows already carry `camera_snapshot_url` where configured; a camera platform is feasible in phase 2 for those printers |
+| Camera | camera entity from Moonraker webcam config (snapshot/stream URLs) | Not shipped in 0.2.0 — roster camera data is not parsed by the integration's model yet; revisit with the thumbnail work |
 | Config flow | host, port (7125), optional API key (32 chars), TLS, printer name; options: polling rate, camera/thumbnail ports, and a "quiet unreachable" mode for printers on smart plugs; no discovery, no reconfigure flow, no unique id | URL + token (§2), unique id set, reauth flow included; options: scan interval (dual-rate in phase 2) |
 | Multiple printers | one config entry per printer (per Moonraker) | **Better:** one entry surfaces the whole roster as separate devices |
 
@@ -262,12 +317,18 @@ pytest workflows, `.ruff.toml`, Apache-2.0.
 
 Local (this VM, no Home Assistant installed): `compileall` clean,
 manifest/hacs/strings JSON valid, `ruff check` clean under the
-ryobi-style ruleset, 9 unit tests pass (snapshot parsing incl. the
-single/multi-printer listener shapes; client URL normalization, token
-header, 401/transport/HTTP error mapping with a fake session).
-GitHub CI on the shipped head: **HACS validation, hassfest, Lint
+ryobi-style ruleset, 21 unit tests pass — the 9 from 0.1.0 plus 12 for
+phase 2 (per-printer status parsing incl. the Bambu full shape, the
+SDCP plural `total_layers`, the unavailable body and type guards; AMS
+tray helpers incl. the external spool; client per-printer fetch with
+token header and URL quoting, 404-as-unavailable, and the bulk poll's
+per-printer failure tolerance with 401 propagation).
+GitHub CI on the shipped 0.1.0 head: **HACS validation, hassfest, Lint
 (ruff) and Python testing all SUCCESS** (the test job installs the real
-pytest-homeassistant-custom-component harness on Python 3.14).
+pytest-homeassistant-custom-component harness on Python 3.14); the
+0.2.0 head is verified the same way before release.
 **Not yet done:** a live load in a real Home Assistant — the first live
-check is installing 0.1.0 in catduck's HA from the HACS custom repository
-and confirming the hub + printer devices appear with correct states.
+check is installing the integration in catduck's HA from the HACS
+custom repository and confirming the hub + printer devices appear with
+correct states, now including the phase-2 job entities against a Print
+Handy build that has the #667 endpoint.

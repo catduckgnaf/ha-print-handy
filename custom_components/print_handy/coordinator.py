@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from datetime import timedelta
 
@@ -20,10 +21,13 @@ LOGGER = logging.getLogger(__name__)
 
 
 class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
-    """Poll Print Handy's /api/status for the whole instance.
+    """Poll Print Handy's status API for the whole instance.
 
-    One coordinator per config entry: the snapshot covers every printer
-    on the roster, so all printer devices read from this single poll.
+    One coordinator per config entry: /api/status covers the instance
+    and roster, and each roster printer's live status is then polled
+    from /api/printers/<id>/status into the same snapshot, so all
+    devices read from this single update. A printer whose status poll
+    fails carries its unavailable status instead of failing the update.
     """
 
     config_entry: ConfigEntry
@@ -50,10 +54,14 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
         )
 
     async def _async_update_data(self) -> Snapshot:
-        """Fetch the latest snapshot."""
+        """Fetch the latest snapshot plus every printer's live status."""
         try:
-            return await self.client.async_get_status()
+            snapshot = await self.client.async_get_status()
+            statuses = await self.client.async_get_printer_statuses(
+                [printer.printer_id for printer in snapshot.printers]
+            )
         except PrintHandyAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except PrintHandyConnectionError as err:
             raise UpdateFailed(str(err)) from err
+        return dataclasses.replace(snapshot, statuses=statuses)

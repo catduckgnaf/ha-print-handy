@@ -8,7 +8,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import PrintHandyConfigEntry
 from .const import DOMAIN, NAME
 from .coordinator import PrintHandyDataUpdateCoordinator
-from .model import PrinterInfo
+from .model import PrinterInfo, PrinterStatus
 
 
 def instance_device_info(coordinator: PrintHandyDataUpdateCoordinator) -> DeviceInfo:
@@ -78,6 +78,13 @@ class PrintHandyPrinterEntity(CoordinatorEntity[PrintHandyDataUpdateCoordinator]
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.printer(self._printer_id)
+
+    @property
+    def status(self) -> PrinterStatus | None:
+        """The current live status for this printer, or None if not polled."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.status(self._printer_id)
 
     @property
     def available(self) -> bool:

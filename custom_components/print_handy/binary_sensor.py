@@ -57,10 +57,16 @@ async def async_setup_entry(
         for description in INSTANCE_BINARY_SENSORS
     ]
     if coordinator.data is not None:
-        entities.extend(
-            PrintHandyPrinterOnlineBinarySensor(coordinator, entry, printer)
-            for printer in coordinator.data.printers
-        )
+        for printer in coordinator.data.printers:
+            entities.append(
+                PrintHandyPrinterOnlineBinarySensor(coordinator, entry, printer)
+            )
+            entities.append(
+                PrintHandyPrinterPrintingBinarySensor(coordinator, entry, printer)
+            )
+            entities.append(
+                PrintHandyPrinterPrintingErrorBinarySensor(coordinator, entry, printer)
+            )
     async_add_entities(entities)
 
 
@@ -115,3 +121,51 @@ class PrintHandyPrinterOnlineBinarySensor(PrintHandyPrinterEntity, BinarySensorE
         """Return the listener health for this printer."""
         printer = self.printer
         return printer.listener_ok if printer else None
+
+
+class PrintHandyPrinterPrintingBinarySensor(PrintHandyPrinterEntity, BinarySensorEntity):
+    """On while this printer's live status is "printing"."""
+
+    _attr_device_class = BinarySensorDeviceClass.RUNNING
+    _attr_name = "Printing"
+
+    def __init__(
+        self,
+        coordinator: PrintHandyDataUpdateCoordinator,
+        entry: PrintHandyConfigEntry,
+        printer: PrinterInfo,
+    ) -> None:
+        """Initialize."""
+        super().__init__(coordinator, entry, printer)
+        self._attr_unique_id = f"{coordinator.client.base_url}:printer:{printer.printer_id}:printing"
+
+    @property
+    def is_on(self) -> bool | None:
+        """True while printing; None before the first status poll."""
+        status = self.status
+        return status.state == "printing" if status else None
+
+
+class PrintHandyPrinterPrintingErrorBinarySensor(
+    PrintHandyPrinterEntity, BinarySensorEntity
+):
+    """On while this printer's live status is "error" (problem class)."""
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_name = "Printing error"
+
+    def __init__(
+        self,
+        coordinator: PrintHandyDataUpdateCoordinator,
+        entry: PrintHandyConfigEntry,
+        printer: PrinterInfo,
+    ) -> None:
+        """Initialize."""
+        super().__init__(coordinator, entry, printer)
+        self._attr_unique_id = f"{coordinator.client.base_url}:printer:{printer.printer_id}:printing_error"
+
+    @property
+    def is_on(self) -> bool | None:
+        """True while in the error state; None before the first status poll."""
+        status = self.status
+        return status.state == "error" if status else None

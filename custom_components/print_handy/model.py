@@ -12,8 +12,18 @@ print_handy/webui/status.py in the Print Handy repo:
   instance under ``listener.printers.<id>`` ({required, ok, reason}); for a
   single-printer instance as the section's own {required, ok, reason}.
 - The snapshot intentionally carries NO live print state (no print state,
-  progress, temperatures, ETA or current file) — see DESIGN.md for the gap
-  this creates and the follow-up endpoint proposed for Print Handy itself.
+  progress, temperatures, ETA or current file).
+
+Live per-printer status comes from the companion endpoint
+``GET /api/printers/<id>/status`` (Print Handy #664, parsed by
+:func:`parse_printer_status` below): the body is the roster identity plus a
+``status`` object holding the adapter's normalized status — ``state``,
+``filename``, ``progress`` (0..1), ``hotend_c`` and ``bed_c`` always, plus
+where the adapter provides them ``hotend_target_c``, ``bed_target_c``,
+``remaining_min``, ``layer`` and a total-layer count (Bambu spells it
+``total_layer``, Elegoo SDCP ``total_layers``), and vendor extras such as
+Bambu's decoded ``ams`` block. A printer whose live read fails still
+answers 200 with ``status.state == "unavailable"`` and a ``detail``.
 """
 
 from __future__ import annotations
@@ -61,11 +71,124 @@ class InstanceInfo:
 
 
 @dataclass(frozen=True)
+class PrinterStatus:
+    """One printer's live status from GET /api/printers/<id>/status.
+
+    Only the fields the endpoint genuinely sends are modeled; anything an
+    adapter does not provide stays None (never guessed). ``ams`` is the
+    raw decoded AMS block Bambu printers report (units/trays/external
+    spool); other vendors do not send it.
+    """
+
+    printer_id: str
+    state: str = "unknown"
+    filename: str = ""
+    progress: float | None = None  # 0..1, as the endpoint sends it
+    hotend_c: float | None = None
+    bed_c: float | None = None
+    hotend_target_c: float | None = None
+    bed_target_c: float | None = None
+    remaining_min: float | None = None
+    layer: int | None = None
+    total_layers: int | None = None
+    detail: str = ""
+    ams: dict[str, Any] | None = None
+
+    @property
+    def unavailable(self) -> bool:
+        """True when Print Handy could not read this printer live."""
+        return self.state == "unavailable"
+
+
+def _number(value: Any) -> float | None:
+    """Return a JSON number as float; bools and non-numbers are not readings."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
+def _count(value: Any) -> int | None:
+    """Return a layer-style count: whole numbers only, as int."""
+    number = _number(value)
+    return int(number) if number is not None else None
+
+
+def parse_printer_status(raw: Any, printer_id: str = "") -> PrinterStatus:
+    """Parse a decoded /api/printers/<id>/status body.
+
+    Raises TypeError when the body is not an object carrying a ``status``
+    object. Optional fields an adapter omits stay None.
+    """
+    if not isinstance(raw, dict):
+        raise TypeError("printer status body is not a JSON object")
+    status = raw.get("status")
+    if not isinstance(status, dict):
+        raise TypeError("printer status body has no status object")
+    resolved_id = str(raw.get("id") or printer_id)
+    total_layers = _count(status.get("total_layer"))
+    if total_layers is None:
+        total_layers = _count(status.get("total_layers"))
+    ams = status.get("ams")
+    return PrinterStatus(
+        printer_id=resolved_id,
+        state=str(status.get("state") or "unknown"),
+        filename=str(status.get("filename") or ""),
+        progress=_number(status.get("progress")),
+        hotend_c=_number(status.get("hotend_c")),
+        bed_c=_number(status.get("bed_c")),
+        hotend_target_c=_number(status.get("hotend_target_c")),
+        bed_target_c=_number(status.get("bed_target_c")),
+        remaining_min=_number(status.get("remaining_min")),
+        layer=_count(status.get("layer")),
+        total_layers=total_layers,
+        detail=str(status.get("detail") or ""),
+        ams=ams if isinstance(ams, dict) else None,
+    )
+
+
+def unavailable_status(printer_id: str, detail: str) -> PrinterStatus:
+    """Build the explicit unavailable status for a printer we could not read."""
+    return PrinterStatus(printer_id=printer_id, state="unavailable", detail=detail)
+
+
+def ams_trays(status: PrinterStatus) -> list[dict[str, Any]]:
+    """Every AMS tray across all units, each tagged with its unit id."""
+    trays: list[dict[str, Any]] = []
+    if status.ams is None:
+        return trays
+    for unit in status.ams.get("units") or []:
+        if not isinstance(unit, dict):
+            continue
+        for tray in unit.get("trays") or []:
+            if isinstance(tray, dict):
+                trays.append({**tray, "unit": unit.get("id")})
+    return trays
+
+
+def active_ams_tray(status: PrinterStatus) -> dict[str, Any] | None:
+    """Return the tray currently feeding the printer (unit tray or external spool)."""
+    for tray in ams_trays(status):
+        if tray.get("active") and tray.get("present"):
+            return tray
+    if status.ams is not None:
+        external = status.ams.get("external")
+        if isinstance(external, dict) and external.get("active") and external.get("present"):
+            return {**external, "unit": "external"}
+    return None
+
+
+def has_ams_filament(status: PrinterStatus) -> bool:
+    """Report whether the printer reported any loaded AMS/external filament."""
+    return active_ams_tray(status) is not None
+
+
+@dataclass(frozen=True)
 class Snapshot:
-    """A parsed /api/status response."""
+    """A parsed /api/status response, plus per-printer live statuses."""
 
     instance: InstanceInfo
     printers: tuple[PrinterInfo, ...] = field(default_factory=tuple)
+    statuses: dict[str, PrinterStatus] = field(default_factory=dict)
 
     def printer(self, printer_id: str) -> PrinterInfo | None:
         """Look up one printer by roster id."""
@@ -73,6 +196,10 @@ class Snapshot:
             if printer.printer_id == printer_id:
                 return printer
         return None
+
+    def status(self, printer_id: str) -> PrinterStatus | None:
+        """Return the live status for one printer, or None if it was not polled."""
+        return self.statuses.get(printer_id)
 
 
 def _as_bool(value: Any) -> bool:
