@@ -225,6 +225,9 @@ manifest/hacs/strings JSON valid, `ruff check` clean under the
 ryobi-style ruleset, 9 unit tests pass (snapshot parsing incl. the
 single/multi-printer listener shapes; client URL normalization, token
 header, 401/transport/HTTP error mapping with a fake session).
+GitHub CI on the shipped head: **HACS validation, hassfest, Lint
+(ruff) and Python testing all SUCCESS** (the test job installs the real
+pytest-homeassistant-custom-component harness on Python 3.14).
 **Not yet done:** a live load in a real Home Assistant — the first live
 check is installing 0.1.0 in catduck's HA from the HACS custom repository
 and confirming the hub + printer devices appear with correct states.
