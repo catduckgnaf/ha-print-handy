@@ -90,6 +90,7 @@ class PrintHandyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=_user_schema(user_input),
             errors=errors,
+            description_placeholders={"example_url": "http://print-handy.local:8080"},
         )
 
     async def async_step_reauth(
@@ -121,6 +122,7 @@ class PrintHandyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=vol.Schema({vol.Required(CONF_TOKEN): str}),
             errors=errors,
+            description_placeholders={"url": str(entry.data[CONF_URL])},
         )
 
 

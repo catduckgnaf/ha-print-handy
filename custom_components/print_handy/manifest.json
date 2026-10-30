@@ -1,1 +1,15 @@
-{"codeowners":["@catduckgnaf"],"config_flow":true,"dependencies":[],"documentation":"https://github.com/catduckgnaf/ha-print-handy","domain":"print_handy","integration_type":"hub","iot_class":"local_polling","issue_tracker":"https://github.com/catduckgnaf/ha-print-handy/issues","name":"Print Handy","requirements":[],"version":"0.1.0"}
+{
+  "domain": "print_handy",
+  "name": "Print Handy",
+  "codeowners": [
+    "@catduckgnaf"
+  ],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/catduckgnaf/ha-print-handy",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/catduckgnaf/ha-print-handy/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
