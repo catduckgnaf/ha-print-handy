@@ -117,14 +117,19 @@ model = model key, via_device = hub):
 
 ### 3.2 Planned when the gap closes (phase 2, per printer)
 
-Print state (enum sensor with `filename`, `thumbnail` attributes),
-Progress % (measurement), ETA (timestamp device class), Print duration,
-Time remaining, Nozzle temperature + target, Bed temperature + target,
-Current layer / Total layers where the adapter provides them, Printing
-binary sensor. Buttons Pause / Resume / Cancel only when a control API
-exists (phase 3) — Print Handy's chat-confirm safety posture means the
-API addition needs its own guard design; this integration will not invent
-endpoints or bypass it.
+Print state (enum sensor with `filename`, `thumbnail`, `start_time`,
+`end_time`, `duration` attributes — the last three make generic timer
+cards work without glue), Progress % (measurement), ETA (timestamp
+device class), Start time (timestamp), Print duration, Time remaining,
+Nozzle temperature + target, Bed temperature + target, Current layer /
+Total layers where the adapter provides them, Printing and
+Printing-error binary sensors, a thumbnail image entity, a camera
+entity where the roster carries a snapshot URL, and a Spool sensor
+(state = filament name; attributes = color, type, remaining, spool id)
+following the Bambu AMS pattern. Buttons Pause / Resume / Cancel only
+when a control API exists (phase 3) — Print Handy's chat-confirm safety
+posture means the API addition needs its own guard design; this
+integration will not invent endpoints or bypass it.
 
 ## 4. The gap, precisely (follow-up for Print Handy itself — draft)
 
@@ -166,7 +171,7 @@ PrusaLink, SDCP, stock Flashforge — from the one Print Handy connection.
 | ETA | timestamp sensor; max of slicer/file/flow blends from metadata estimates + elapsed | Phase 2; needs duration/estimate fields in §4 endpoint (Bambu already has remaining_min) |
 | Print duration / time left | print_duration, total_duration sensors | Phase 2 (same dependency) |
 | Filename | sensor + attribute on state sensor | Phase 2 |
-| Thumbnail | state sensor attribute `thumbnail_path`; files served by Moonraker | Phase 2/3; needs thumbnail route (§4) |
+| Thumbnail | state sensor attribute plus a dedicated `Thumbnail` camera entity (`PreviewCamera`, served from Moonraker's file store, image only while printing); webcam is a separate MJPEG camera entity | Phase 2/3; needs thumbnail route (§4); ship both the attribute and an image/camera entity |
 | Nozzle / bed temps + targets | sensors incl. target sensors; **writable number entities for targets** | Phase 2 read-only; writable targets = phase 3 control scope |
 | Chamber temp, fan speeds, speed factor, flow, extruder count temps | sensors from heater_generic/sensor/fan objects | Only where a Print Handy adapter exposes them; today: not in the normalized shape → adapter-level extension, later phase |
 | Current / total layer | display_status info + metadata object count | Phase 2 where provided (Bambu yes; Klipper adapters would need print_stats.info/metadata surfaced) |
@@ -179,28 +184,57 @@ PrusaLink, SDCP, stock Flashforge — from the one Print Handy connection.
 | Config flow | host, port, optional API key, TLS; options for print/queue polling rates | URL + token (§2); options: scan interval (dual-rate in phase 2) |
 | Multiple printers | one config entry per printer (per Moonraker) | **Better:** one entry surfaces the whole roster as separate devices |
 
-OctoPrint core integration (home-assistant/core `octoprint`), for
-contrast, is minimal: current state, bed/tool actual+target sensors, job
-percentage, printing + printing-error binary sensors; no buttons, no
-services. The Moonraker integration is the real bar.
+OctoPrint core integration (home-assistant/core `octoprint`), read on
+the dev branch, is broader than its reputation: a fixed sensor set
+(current state enum, job percentage, estimated finish + start time as
+`timestamp` sensors, current file, file size), dynamic per-tool
+actual/target temperature sensors, printing + printing-error binary
+sensors, six buttons (resume/pause/stop job, shutdown, reboot, restart),
+target-temperature number entities per bed/tool, an MJPEG camera when a
+webcam is enabled, and one service (`octoprint.printer_connect`). Its
+notable design choice: **no entity carries attributes** — every datum is
+its own entity. The Moonraker integration remains the richer bar, but
+OctoPrint core sets the floor for buttons and numbers.
 
 ### Card-friendliness (from the card survey)
 
-Popular printer cards (for example the Flashforge Lovelace card used
-with vendor integrations, and dashboard builds around the Moonraker
-integration) consume **ordinary entities**: state, progress and temp
-sensors, plus a camera/image entity for the thumbnail or camera feed.
-No card reads temperatures out of attributes. Commitments for phase 2:
+Surveyed: Threedy (archived OctoPrint card, prefix-derived entities),
+`kasperlaursen/octoprint-card` (explicit entity slots), the Bambu Lab
+integration's bundled cards, Mushroom/button-card/bar-card dashboard
+builds around the Moonraker integration, `timer-bar-card`, and
+`lovelace-entity-progress-card`. Findings that shape phase 2:
 
-- temps as °C measurement sensors, progress as % measurement — never
-  buried in attributes;
-- ETA as a `timestamp` device-class sensor so cards and the Energy-style
-  relative-time helpers format it natively;
-- `filename` and `thumbnail` as attributes on the print-state sensor,
-  **and** a dedicated image/camera entity for the thumbnail, matching how
-  cards actually bind pictures;
-- stable naming: device name = the printer's Print Handy name, entities
-  named by function (Print state, Progress, Nozzle temperature, ...).
+- **One predictable prefix, stable suffixes, forever.** Prefix-deriving
+  cards and every dashboard gist hard-code entity IDs like
+  `sensor.<printer>_current_state` and `button.<printer>_pause_job`.
+  Near-synonym drift (`pause_job` vs `pause_print`, `current_state` vs
+  `print_status`) silently breaks them. Phase 2 fixes one suffix
+  vocabulary per device and documents it.
+- **Separate, correctly typed sensors beat attributes for core
+  metrics** — that is what cards actually bind: progress as a numeric
+  % sensor, actual *and* target temps as temperature/measurement
+  sensors (history feeds graph cards), filament used, current/total
+  layer. Nothing reads temperatures out of attributes.
+- **Time needs all three forms:** a `timestamp` ETA sensor, a
+  `timestamp` start-time sensor, *and* duration remaining/elapsed
+  sensors. OctoPrint core dropped its duration sensors and both
+  dedicated cards broke on exactly that. As a bonus, carrying
+  `start_time`/`end_time`/`duration` attributes on the print-state
+  sensor would let generic timer cards work with zero per-integration
+  glue — no printer integration does this today.
+- **Status = one enum sensor + binary flags:** lowercase enum state
+  (Print Handy's normalized states already match) plus
+  printing / printing-error binary sensors for conditional cards.
+- **Thumbnail and webcam as entities, not attributes:** Bambu's
+  `image.<printer>_cover_image` and Moonraker's thumbnail/webcam
+  camera entities are the established pattern; cards bind
+  picture-entity/picture-glance and the standard `entity_picture`.
+- **Attributes are for grouped data, not metrics:** the proven case is
+  Bambu's AMS tray sensor — state = filament name, attributes carry
+  color, type, remaining, empty, name, nozzle temperature range and
+  serial. Print Handy's Spoolman depth maps directly onto this pattern
+  for a per-printer spool sensor; the same shape fits an error sensor
+  (state = count, attributes = codes/descriptions).
 
 A companion custom card is **phase 2, scoped but not built here**: a
 single card listing every Print Handy printer with state, progress bar,
