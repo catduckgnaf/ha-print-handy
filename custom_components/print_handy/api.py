@@ -234,8 +234,13 @@ class PrintHandyApiClient:
         if path_template is None:
             raise ValueError(f"unknown control action: {action!r}")
         path = path_template.format(printer_id=quote(printer_id, safe=""))
+        # Print Handy refuses cancel (400) without an explicit confirm; the
+        # Cancel button press is that confirmation. Pause and resume take no body.
+        body = {"confirm": True} if action == "cancel" else None
         await self._async_post_control(
-            f"{self.base_url}{path}", f"the {action} action for printer '{printer_id}'"
+            f"{self.base_url}{path}",
+            f"the {action} action for printer '{printer_id}'",
+            body,
         )
 
     async def async_set_printer_target(
