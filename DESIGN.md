@@ -388,10 +388,12 @@ For 0.3.0 (phase 3): local validation as above — `compileall` clean,
 ruff clean, 32 unit tests pass (the 21 from 0.2.0 plus 11 for the
 control client: per-action URLs and token header, id quoting, the
 both-keys target body, and the refusal / auth / server-error /
-transport mappings). The control calls are tested against the repo's
-fake session only: no live Print Handy with the #708 control API
-exists yet, and no live Home Assistant load has been run for the new
-platforms.
+transport mappings). GitHub CI on the 0.3.0 code head (`85c3f9c`):
+**HACS validation, hassfest, Lint (ruff) and Python testing all
+SUCCESS** (32 passed under the real HA harness on Python 3.14). The
+control calls are tested against the repo's fake session only: no
+live Print Handy with the #708 control API exists yet, and no live
+Home Assistant load has been run for the new platforms.
 
 **Not yet done:** a live load in a real Home Assistant — the first live
 check is installing the integration in catduck's HA from the HACS
