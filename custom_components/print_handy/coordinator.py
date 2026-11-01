@@ -9,11 +9,16 @@ from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_URL
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import PrintHandyApiClient, PrintHandyAuthError, PrintHandyConnectionError
+from .api import (
+    PrintHandyApiClient,
+    PrintHandyApiError,
+    PrintHandyAuthError,
+    PrintHandyConnectionError,
+)
 from .const import CONF_SCAN_INTERVAL, CONF_TOKEN, DEFAULT_SCAN_INTERVAL, DOMAIN
 from .model import Snapshot
 
@@ -65,3 +70,39 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
         except PrintHandyConnectionError as err:
             raise UpdateFailed(str(err)) from err
         return dataclasses.replace(snapshot, statuses=statuses)
+
+    async def async_control_printer(self, printer_id: str, action: str) -> None:
+        """Send a pause / resume / cancel action to one printer.
+
+        Any failure — controls refused on the Print Handy side, an
+        unreachable Web UI, a rejected token — is raised as a
+        HomeAssistantError so the button press fails visibly in the UI
+        and in automations, never silently. On success the coordinator
+        refreshes so state sensors reflect the action promptly.
+        """
+        try:
+            await self.client.async_printer_control(printer_id, action)
+        except PrintHandyApiError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self.async_request_refresh()
+
+    async def async_set_printer_target(
+        self,
+        printer_id: str,
+        *,
+        hotend_c: float | None = None,
+        bed_c: float | None = None,
+    ) -> None:
+        """Set target temperatures on one printer, failing visibly.
+
+        Same failure contract as async_control_printer: refusals and
+        transport failures become a HomeAssistantError on the number's
+        set-value call; success triggers a refresh.
+        """
+        try:
+            await self.client.async_set_printer_target(
+                printer_id, hotend_c=hotend_c, bed_c=bed_c
+            )
+        except PrintHandyApiError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self.async_request_refresh()
