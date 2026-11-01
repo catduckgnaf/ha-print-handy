@@ -169,3 +169,116 @@ def test_get_printer_statuses_propagates_auth_errors():
         asyncio.run(
             _client(session, token="wrong").async_get_printer_statuses(["good", "locked"])
         )
+
+
+class _ControlSession:
+    """Fake session recording POSTs; routes map URL -> response or Exception."""
+
+    def __init__(self, routes):
+        self._routes = routes
+        self.posts = []
+
+    def post(self, url, headers=None, json=None):
+        self.posts.append((url, headers or {}, json))
+        route = self._routes[url]
+        if isinstance(route, Exception):
+            raise route
+        return route
+
+
+def _control_url(printer_id, action):
+    return f"http://ph.local:8080/api/printers/{printer_id}/{action}"
+
+
+def test_control_actions_post_to_the_right_printer_urls():
+    """Pause / resume / cancel each POST to that printer's own endpoint."""
+    for action in ("pause", "resume", "cancel"):
+        session = _ControlSession({_control_url("ad5x", action): _FakeResponse(200, {})})
+        asyncio.run(_client(session, token="sekrit").async_printer_control("ad5x", action))
+        url, headers, body = session.posts[0]
+        assert url == _control_url("ad5x", action)
+        assert headers == {"X-WebUI-Token": "sekrit"}
+        assert body is None
+
+
+def test_control_quotes_the_printer_id():
+    """Control URLs quote the printer id exactly like the status URL."""
+    session = _ControlSession(
+        {_control_url("my%20printer", "pause"): _FakeResponse(200, {})}
+    )
+    asyncio.run(_client(session).async_printer_control("my printer", "pause"))
+    assert session.posts[0][0] == _control_url("my%20printer", "pause")
+
+
+def test_control_unknown_action_is_rejected_without_a_post():
+    """An action outside the contract is a programming error, not a POST."""
+    session = _ControlSession({})
+    with pytest.raises(ValueError, match="unknown control action"):
+        asyncio.run(_client(session).async_printer_control("ad5x", "explode"))
+    assert session.posts == []
+
+
+def test_control_403_is_refused_with_the_server_reason():
+    """Controls disabled on the Print Handy side reads as a refusal."""
+    body = {"ok": False, "reason": "controls are disabled"}
+    session = _ControlSession({_control_url("ad5x", "pause"): _FakeResponse(403, body)})
+    with pytest.raises(api.PrintHandyControlRefusedError) as excinfo:
+        asyncio.run(_client(session).async_printer_control("ad5x", "pause"))
+    assert "controls are disabled" in str(excinfo.value)
+
+
+def test_control_404_is_refused():
+    """A 404 (unknown printer, or no control API) also reads as a refusal."""
+    session = _ControlSession({_control_url("ghost", "cancel"): _FakeResponse(404, {})})
+    with pytest.raises(api.PrintHandyControlRefusedError):
+        asyncio.run(_client(session).async_printer_control("ghost", "cancel"))
+
+
+def test_control_401_is_auth_error():
+    """A rejected token on a control POST is the auth error, not a refusal."""
+    session = _ControlSession({_control_url("ad5x", "resume"): _FakeResponse(401, {})})
+    with pytest.raises(api.PrintHandyAuthError):
+        asyncio.run(_client(session, token="wrong").async_printer_control("ad5x", "resume"))
+
+
+def test_control_500_is_a_generic_api_error():
+    """A server error is an API error distinct from a refusal."""
+    session = _ControlSession({_control_url("ad5x", "pause"): _FakeResponse(500, {})})
+    with pytest.raises(api.PrintHandyApiError) as excinfo:
+        asyncio.run(_client(session).async_printer_control("ad5x", "pause"))
+    assert type(excinfo.value) is api.PrintHandyApiError
+
+
+def test_control_transport_failure_is_connection_error():
+    """An unreachable Web UI on a control POST is a connection error."""
+    session = _ControlSession({_control_url("ad5x", "pause"): OSError("no route")})
+    with pytest.raises(api.PrintHandyConnectionError):
+        asyncio.run(_client(session).async_printer_control("ad5x", "pause"))
+
+
+def test_set_target_posts_both_keys_with_null_for_unknown_heater():
+    """The target body always carries both keys; unknown heaters are null."""
+    session = _ControlSession({_control_url("ad5x", "target"): _FakeResponse(200, {})})
+    asyncio.run(
+        _client(session, token="sekrit").async_set_printer_target("ad5x", hotend_c=210.0)
+    )
+    url, headers, body = session.posts[0]
+    assert url == _control_url("ad5x", "target")
+    assert headers == {"X-WebUI-Token": "sekrit"}
+    assert body == {"hotend_c": 210.0, "bed_c": None}
+
+
+def test_set_target_posts_both_values():
+    """Setting both heaters posts both numbers."""
+    session = _ControlSession({_control_url("ad5x", "target"): _FakeResponse(200, {})})
+    asyncio.run(
+        _client(session).async_set_printer_target("ad5x", hotend_c=200.0, bed_c=60.0)
+    )
+    assert session.posts[0][2] == {"hotend_c": 200.0, "bed_c": 60.0}
+
+
+def test_set_target_refusal_surfaces():
+    """A refused target set raises the refusal error, never a silent no-op."""
+    session = _ControlSession({_control_url("ad5x", "target"): _FakeResponse(403, {})})
+    with pytest.raises(api.PrintHandyControlRefusedError):
+        asyncio.run(_client(session).async_set_printer_target("ad5x", bed_c=60.0))

@@ -38,6 +38,8 @@ if importlib.util.find_spec("homeassistant") is None:
         """Stand-in for homeassistant.const.Platform (only what const.py uses)."""
 
         BINARY_SENSOR = "binary_sensor"
+        BUTTON = "button"
+        NUMBER = "number"
         SENSOR = "sensor"
 
     const.Platform = Platform
