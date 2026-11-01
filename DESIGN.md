@@ -2,10 +2,16 @@
 
 Status: 0.2.0 shipped the phase-2 job-level entities, built on the
 per-printer status endpoint that landed in Print Handy (issue #664, PR
-#667). This document records what Print Handy actually exposes (verified
-against its source at 2.2.1, main `93b5144`, plus the merged #667 endpoint),
-the transport decision that follows from it, the entity model, and the
-parity bar set by the existing Moonraker integration.
+#667). 0.3.0 adds the phase-3 controls (§3.3), built against the Print
+Handy control API contract (Print Handy issue #708: `POST
+/api/printers/<id>/pause|resume|cancel` and `/target`); that Print
+Handy work lands separately, and until it does — or while its controls
+gate is off, which is the default there — every control action fails
+visibly with the server's refusal. This document records what Print
+Handy actually exposes (verified against its source at 2.2.1, main
+`93b5144`, plus the merged #667 endpoint), the transport decision that
+follows from it, the entity model, and the parity bar set by the
+existing Moonraker integration.
 
 ## 1. What Print Handy exposes today (Stage 1 recon)
 
@@ -161,7 +167,9 @@ endpoint genuinely sends (named here, not silently dropped):
   timestamp and the remaining-duration sensor instead.
 - **Targets are read-only sensors, not numbers** — the endpoint is
   read-only; writable targets are phase-3 control scope (the Moonraker
-  integration's target numbers write G-code).
+  integration's target numbers write G-code). 0.3.0 update: the
+  writable numbers now exist (§3.3) and the read-only sensors remain
+  alongside them, unchanged — see the coexistence note there.
 - **The Spool sensor shipped as the AMS Filament sensor above, not a
   Spoolman sensor** — the endpoint carries no Spoolman assignment data
   at all (no spool id, filament name or remaining weight from
@@ -180,6 +188,55 @@ Buttons Pause / Resume / Cancel only when a control API exists
 (phase 3) — Print Handy's chat-confirm safety posture means the API
 addition needs its own guard design; this integration will not invent
 endpoints or bypass it.
+
+### 3.3 Shipped in 0.3.0 (phase 3, per printer, against the §708 contract)
+
+New fixed suffixes, documented in the README: buttons `pause`,
+`resume`, `cancel`; numbers reuse the target suffixes
+(`nozzle_target_temperature`, `bed_target_temperature`) under the
+`number.` domain. Every 0.1.0 / 0.2.0 entity id is unchanged; controls
+are additive.
+
+| Entity | Type | Action |
+|---|---|---|
+| Pause / Resume / Cancel | button | `POST /api/printers/<id>/pause|resume|cancel` — created for every roster printer, acting only on that printer |
+| Nozzle target temperature | number (temperature) | reads `hotend_target_c`; setting it POSTs `/api/printers/<id>/target` |
+| Bed target temperature | number (temperature) | reads `bed_target_c`; same POST |
+
+Design choices, recorded:
+
+- **Numbers coexist with the target sensors; they do not replace
+  them.** The phase-2 sketch said targets "become numbers", but the
+  sensors carry the measurement history cards bind to and the
+  integration's rule is that shipped entity ids never change. The
+  numbers are additive writable controls with the same suffix under
+  their own domain. (The Moonraker bar has targets only as numbers;
+  keeping both is a deliberate deviation for id stability.)
+- **Creation gating matches the target sensors.** A number is created
+  only when the first poll carries that heater's target field, so
+  printers whose adapters report no targets (the Moonraker/ZMod
+  family included) gain no dead numbers. Buttons are not gated: pause
+  / resume / cancel exist for every printer family on the Print Handy
+  side.
+- **A target set posts both heaters.** The contract body is
+  `{"hotend_c": <number|null>, "bed_c": <number|null>}`; the number
+  being set carries the new value and the other heater carries its
+  current target, so a null is sent only for a heater whose target is
+  genuinely unknown. The number's min/max (0–350 °C nozzle, 0–150 °C
+  bed) is a UI bound only; Print Handy and the printer enforce their
+  own limits.
+- **Failures are visible, never silent.** The Print Handy side gates
+  controls behind an operator setting that is off by default; a
+  disabled server refuses with 403/404, which the client raises as a
+  dedicated refusal error (carrying the server's reason) and the
+  coordinator turns into a `HomeAssistantError` on the press / set
+  call. The same applies to an unreachable Web UI, a rejected token,
+  and an offline printer's explicit failure. A successful action
+  requests a coordinator refresh.
+
+Still phase-3 *discussion only*, not built: emergency stop and
+firmware / server restart buttons, a send-G-code service, and
+exclude-object (issue #1 keeps those open).
 
 ## 4. The gap, precisely — closed, except the thumbnail
 
@@ -232,13 +289,13 @@ Print Handy connection.
 | Print duration / time left | projected-total, time-left, print_duration and slicer-estimate duration sensors | Time remaining shipped 0.2.0 (`_time_remaining` duration sensor). Projected-total, elapsed print-duration and slicer-estimate sensors NOT shipped — the endpoint carries no elapsed time or slicer estimate |
 | Filename | sensor, blanked when not printing (as are most job sensors) | Shipped 0.2.0: `_filename` sensor (blank filename reads as no state) |
 | Thumbnail | dedicated `Thumbnail` camera entity (HTTP download from Moonraker's file store, image only while printing); webcam is a separate MJPEG camera entity per `server.webcams.list` | Not shipped — thumbnail route deferred on Print Handy #664 (no per-printer source exists) |
-| Nozzle / bed temps + targets | Temperature + Power sensors per heater object; **targets exist only as writable Number entities** (via G-code), there are no target sensors | Shipped 0.2.0: actual + target temperature sensors (read-only, so here targets ARE sensors — the inverse of Moonraker); writable targets = phase 3 control scope |
+| Nozzle / bed temps + targets | Temperature + Power sensors per heater object; **targets exist only as writable Number entities** (via G-code), there are no target sensors | Shipped 0.2.0: actual + target temperature sensors (read-only, so here targets ARE sensors — the inverse of Moonraker). Shipped 0.3.0: writable target Numbers alongside the sensors, gated to printers that report targets (§3.3) |
 | Chamber temp, fan speeds, speed factor, toolhead position, MCU/system stats | fully object-discovered sensors/numbers from heater_generic, temperature_sensor, fan, gcode_move, mcu and system objects; plus LED lights, output-pin switches/numbers, Moonraker power-device switches, one button per Klipper macro, host-service and machine-update entities | Only where a Print Handy adapter exposes the underlying data; today the normalized shape carries none of it → adapter-level extensions, later phases. Print Handy's own power/light story runs through HA itself, so power-device and LED parity is deliberately not chased |
 | Current / total layer | print_stats.info, then virtual_sdcard, then computed from file metadata (object/first-layer height) | Shipped 0.2.0 where provided (Bambu, Elegoo SDCP); Klipper-family normalized status still surfaces neither, so those printers get no layer sensors |
 | Filament used / spool | filament_used sensor + history totals; Spoolman support is **only a Spool ID sensor** — no name, material or remaining weight | Shipped 0.2.0 as the AMS Filament sensor from the printer-reported `ams` block (name + color/material/remaining_pct attributes, full tray list) — matches this bar's shape with richer data. No filament-used sensor and no Spoolman spool data: the endpoint carries neither a filament-used figure nor any Spoolman assignment, so the Spoolman-depth sensor (spool id, remaining weight) awaits Print Handy endpoint fields |
 | Job queue count / list | Queue State + Jobs-in-queue sensors, Start-queue button; no per-job control | Print Handy has no cross-vendor queue concept today → out of scope until it does |
 | Exclude object | **not supported** (never queried) | Not in the bar; Print Handy tracks objects from slicing, so this is a possible phase 3 differentiator, not parity |
-| Pause / Resume / Cancel buttons | buttons → /printer/print/* | Phase 3, gated on a Print Handy control API (§3.2) |
+| Pause / Resume / Cancel buttons | buttons → /printer/print/* | Shipped 0.3.0: per-printer buttons posting to Print Handy's control API (§3.3); usable once the Print Handy side (#708) lands with controls enabled there |
 | Emergency stop, firmware/server restart buttons | buttons | Phase 3 discussion; Print Handy's confirm-first posture may keep E-stop chat-side |
 | Send G-code | `moonraker.send_gcode` service | Phase 3 at earliest; same gate |
 | Camera | camera entity from Moonraker webcam config (snapshot/stream URLs) | Not shipped in 0.2.0 — roster camera data is not parsed by the integration's model yet; revisit with the thumbnail work |
@@ -309,9 +366,9 @@ config_flow, `local_polling`, hub), `__init__.py` (runtime_data
 coordinator, forward platforms), `config_flow.py` (+ reauth + options),
 `coordinator.py`, `api.py` (duck-typed session client), `model.py`
 (HA-free snapshot parsing, unit-tested without Home Assistant),
-`entity.py`, `sensor.py`, `binary_sensor.py`, `strings.json` +
-`translations/en.json`. Repo: `hacs.json`, HACS + hassfest + ruff +
-pytest workflows, `.ruff.toml`, Apache-2.0.
+`entity.py`, `sensor.py`, `binary_sensor.py`, `button.py`, `number.py`,
+`strings.json` + `translations/en.json`. Repo: `hacs.json`, HACS +
+hassfest + ruff + pytest workflows, `.ruff.toml`, Apache-2.0.
 
 ## 7. Validation status
 
@@ -327,6 +384,15 @@ GitHub CI on the shipped 0.1.0 head: **HACS validation, hassfest, Lint
 (ruff) and Python testing all SUCCESS** (the test job installs the real
 pytest-homeassistant-custom-component harness on Python 3.14). The
 0.2.0 code head (`30ae154`) verified the same way: **all four SUCCESS**.
+For 0.3.0 (phase 3): local validation as above — `compileall` clean,
+ruff clean, 32 unit tests pass (the 21 from 0.2.0 plus 11 for the
+control client: per-action URLs and token header, id quoting, the
+both-keys target body, and the refusal / auth / server-error /
+transport mappings). The control calls are tested against the repo's
+fake session only: no live Print Handy with the #708 control API
+exists yet, and no live Home Assistant load has been run for the new
+platforms.
+
 **Not yet done:** a live load in a real Home Assistant — the first live
 check is installing the integration in catduck's HA from the HACS
 custom repository and confirming the hub + printer devices appear with
