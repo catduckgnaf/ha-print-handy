@@ -321,7 +321,16 @@ async def test_slot_sensors_go_unavailable_when_the_spool_poll_fails(
         ):
             await entry.runtime_data.async_refresh()
             await hass.async_block_till_done()
-        assert _slot_state(hass, 1).state == "unavailable"
+        # An unavailable entity carries no extra_state_attributes, so the
+        # slot-attribute lookup in _slot_state cannot find it; look the
+        # slot sensors up by entity id instead.
+        slot_states = [
+            state
+            for state in hass.states.async_all("sensor")
+            if state.entity_id.endswith("_slot_1_spool")
+        ]
+        assert len(slot_states) == 1
+        assert slot_states[0].state == "unavailable"
 
 
 async def test_service_for_a_printer_on_two_instances_is_refused(
