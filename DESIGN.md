@@ -7,11 +7,15 @@ Handy control API contract (Print Handy issue #708: `POST
 /api/printers/<id>/pause|resume|cancel` and `/target`); that Print
 Handy work lands separately, and until it does — or while its controls
 gate is off, which is the default there — every control action fails
-visibly with the server's refusal. This document records what Print
-Handy actually exposes (verified against its source at 2.2.1, main
-`93b5144`, plus the merged #667 endpoint), the transport decision that
-follows from it, the entity model, and the parity bar set by the
-existing Moonraker integration.
+visibly with the server's refusal. 0.4.0 adds the spool surface
+(§3.4), built against the Print Handy spool API contract (Print Handy
+issue #789, PR #810: `GET /api/printers/<id>/spools` and `POST
+/api/printers/<id>/spools/{assign,swap,unassign,add,edit,sync}`, the
+write side behind the same controls gate and token). This document
+records what Print Handy actually exposes (verified against its
+source at 2.2.1, main `93b5144`, plus the merged #667 endpoint), the
+transport decision that follows from it, the entity model, and the
+parity bar set by the existing Moonraker integration.
 
 ## 1. What Print Handy exposes today (Stage 1 recon)
 
@@ -238,6 +242,58 @@ Still phase-3 *discussion only*, not built: emergency stop and
 firmware / server restart buttons, a send-G-code service, and
 exclude-object (issue #1 keeps those open).
 
+### 3.4 Shipped in 0.4.0 (spools, per printer, against the #789 contract)
+
+New fixed suffixes, documented in the README: sensors `slot_1_spool`
+through `slot_4_spool` (one per slot the spools view reports), under
+the `sensor.` domain. Every earlier entity id is unchanged; the spool
+surface is additive. This is also the Spoolman-depth sensor §3.2 and
+§5 deferred until Print Handy served spool assignment data — the
+#789 endpoint is that data.
+
+| Entity / service | Type | Source / action |
+|---|---|---|
+| Slot N spool | sensor | `GET /api/printers/<id>/spools` slots: state = assigned spool's name (no state when empty); attributes: slot, spool_id, material, color, color_hex, brand, remaining_weight, initial_weight, remaining_percent, archived, location, plus the view's conflicts when it names any |
+| `print_handy.assign_spool` | service | `POST .../spools/assign` with `{slot, spool_id}` |
+| `print_handy.swap_spools` | service | `POST .../spools/swap` with `{slot_a, slot_b}` |
+| `print_handy.unassign_spool` | service | `POST .../spools/unassign` with `{slot}` |
+| `print_handy.add_spool` | service | `POST .../spools/add` with `{material, color, grams}` plus `brand` / `hex` only when given — the API's add action maps cleanly (the #512 shelf creation path), so it is included |
+| `print_handy.sync_spools` | service | `POST .../spools/sync` with no body |
+
+Design choices, recorded:
+
+- **One poll, no spool state of its own.** The coordinator's existing
+  update fetches each printer's spools view alongside its live
+  status, into the same snapshot; there is no second poller and the
+  integration stores nothing beyond the poll. Spoolman owns the
+  spool records, Print Handy owns the slot assignment (#798's
+  `ph_slot`), and this integration only mirrors the view.
+- **Creation gating matches the numbers.** A slot sensor is created
+  only when the first poll carries an available spools view for that
+  printer, so a Print Handy without the #789 endpoint — whose view
+  reads as the explicit unavailable view, exactly like a 404 status —
+  gains no dead slot entities. Per-printer spools failures are
+  tolerated the same way per-printer status failures are; only a 401
+  propagates.
+- **Percent is never estimated.** `remaining_percent` rides as an
+  attribute only when Print Handy sends it, which is only when the
+  spool's starting weight is recorded (#744's rule, kept here).
+- **Failures are visible, never silent — same posture as §3.3.** The
+  spool writes sit behind the same controls gate (off by default);
+  every named refusal the API sends (`{ok: false, reason}` with 400 /
+  403 / 404 / 409 / 502) raises a dedicated spool refusal error
+  carrying the server's reason, and the coordinator turns it into a
+  `HomeAssistantError` on the service call. A successful action
+  requests a coordinator refresh. Services are registered once on
+  entry setup and removed when the last entry unloads; an unknown
+  printer id is a named error — no default-printer fallback.
+- **The API's `edit` action is not a service in 0.4.0.** Editing a
+  spool's Spoolman record (name, material, color, brand,
+  remaining weight, archive) stays in Print Handy's Web UI Spools
+  page and in Spoolman, whose filament-record sharing the edit
+  response names; the HA services cover the slot-assignment flows
+  (assign / swap / unassign / add / sync) only.
+
 ## 4. The gap, precisely — closed, except the thumbnail
 
 Nothing in this repo could manufacture the phase-2 entities: the data
@@ -292,7 +348,7 @@ Print Handy connection.
 | Nozzle / bed temps + targets | Temperature + Power sensors per heater object; **targets exist only as writable Number entities** (via G-code), there are no target sensors | Shipped 0.2.0: actual + target temperature sensors (read-only, so here targets ARE sensors — the inverse of Moonraker). Shipped 0.3.0: writable target Numbers alongside the sensors, gated to printers that report targets (§3.3) |
 | Chamber temp, fan speeds, speed factor, toolhead position, MCU/system stats | fully object-discovered sensors/numbers from heater_generic, temperature_sensor, fan, gcode_move, mcu and system objects; plus LED lights, output-pin switches/numbers, Moonraker power-device switches, one button per Klipper macro, host-service and machine-update entities | Only where a Print Handy adapter exposes the underlying data; today the normalized shape carries none of it → adapter-level extensions, later phases. Print Handy's own power/light story runs through HA itself, so power-device and LED parity is deliberately not chased |
 | Current / total layer | print_stats.info, then virtual_sdcard, then computed from file metadata (object/first-layer height) | Shipped 0.2.0 where provided (Bambu, Elegoo SDCP); Klipper-family normalized status still surfaces neither, so those printers get no layer sensors |
-| Filament used / spool | filament_used sensor + history totals; Spoolman support is **only a Spool ID sensor** — no name, material or remaining weight | Shipped 0.2.0 as the AMS Filament sensor from the printer-reported `ams` block (name + color/material/remaining_pct attributes, full tray list) — matches this bar's shape with richer data. No filament-used sensor and no Spoolman spool data: the endpoint carries neither a filament-used figure nor any Spoolman assignment, so the Spoolman-depth sensor (spool id, remaining weight) awaits Print Handy endpoint fields |
+| Filament used / spool | filament_used sensor + history totals; Spoolman support is **only a Spool ID sensor** — no name, material or remaining weight | Shipped 0.2.0 as the AMS Filament sensor from the printer-reported `ams` block (name + color/material/remaining_pct attributes, full tray list) — matches this bar's shape with richer data. Shipped 0.4.0: the Spoolman-depth sensors this row awaited — one slot spool sensor per slot from the #789 spools endpoint (spool id, name, material, color, remaining weight as attributes; §3.4), plus the spool services. No filament-used sensor: no endpoint carries a filament-used figure |
 | Job queue count / list | Queue State + Jobs-in-queue sensors, Start-queue button; no per-job control | Print Handy has no cross-vendor queue concept today → out of scope until it does |
 | Exclude object | **not supported** (never queried) | Not in the bar; Print Handy tracks objects from slicing, so this is a possible phase 3 differentiator, not parity |
 | Pause / Resume / Cancel buttons | buttons → /printer/print/* | Shipped 0.3.0: per-printer buttons posting to Print Handy's control API (§3.3); usable once the Print Handy side (#708) lands with controls enabled there |
@@ -363,11 +419,11 @@ cannot give. It would consume exactly the entities above.
 
 `custom_components/print_handy/`: `manifest.json` (domain `print_handy`,
 config_flow, `local_polling`, hub), `__init__.py` (runtime_data
-coordinator, forward platforms), `config_flow.py` (+ reauth + options),
+coordinator, forward platforms, the #789 spool services), `config_flow.py` (+ reauth + options),
 `coordinator.py`, `api.py` (duck-typed session client), `model.py`
 (HA-free snapshot parsing, unit-tested without Home Assistant),
 `entity.py`, `sensor.py`, `binary_sensor.py`, `button.py`, `number.py`,
-`strings.json` + `translations/en.json`. Repo: `hacs.json`, HACS +
+`services.yaml`, `strings.json` + `translations/en.json`. Repo: `hacs.json`, HACS +
 hassfest + ruff + pytest workflows, `.ruff.toml`, Apache-2.0.
 
 ## 7. Validation status
@@ -394,6 +450,24 @@ SUCCESS** (32 passed under the real HA harness on Python 3.14). The
 control calls are tested against the repo's fake session only: no
 live Print Handy with the #708 control API exists yet, and no live
 Home Assistant load has been run for the new platforms.
+
+For 0.4.0 (spools, §3.4): local validation as above — `compileall`
+clean, ruff clean, 57 unit tests pass and 1 module skipped in the
+HA-free local run (the 32 from 0.3.0 plus 25 new HA-free tests: the
+spools view parser incl. the percent-where-known rule, conflicts and
+type guards, and the spool client — per-action URLs, payloads and
+token header, 404-as-unavailable, the batch poll's per-printer
+failure tolerance with 401 propagation, and every named refusal
+status carrying its reason). The HA-level tests for the slot sensors
+and services (tests/test_spools.py, 6 tests: poll reflection, update
+after a poll cycle, all five service payloads, the refusal and
+unknown-printer HomeAssistantErrors) are skipped in that local run
+because the pinned test harness (pytest-homeassistant-custom-component
+0.13.373) requires Python 3.14 and this VM has only Python 3.12; they
+run in GitHub CI on Python 3.14, which is the authoritative check for
+them. The spool calls are tested against fake sessions only: no live
+Print Handy with the #789 spool API and no live Home Assistant load
+has been run for the new surface yet.
 
 **Not yet done:** a live load in a real Home Assistant — the first live
 check is installing the integration in catduck's HA from the HACS

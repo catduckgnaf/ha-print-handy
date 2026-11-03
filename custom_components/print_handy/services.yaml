@@ -1,0 +1,147 @@
+assign_spool:
+  name: Assign spool
+  description: Assign a spool to a slot on one printer. A spool already in the slot goes back on the shelf.
+  fields:
+    printer_id:
+      name: Printer
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it.
+      required: true
+      example: flashforge-ad5x
+      selector:
+        text:
+    slot:
+      name: Slot
+      description: Slot number to assign the spool to.
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 4
+          step: 1
+          mode: box
+    spool_id:
+      name: Spool
+      description: Spoolman spool id to assign, as shown on the shelf and slot spool sensors.
+      required: true
+      example: 7
+      selector:
+        number:
+          min: 1
+          step: 1
+          mode: box
+swap_spools:
+  name: Swap spools
+  description: Swap the spools in two slots on one printer.
+  fields:
+    printer_id:
+      name: Printer
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it.
+      required: true
+      example: flashforge-ad5x
+      selector:
+        text:
+    slot_a:
+      name: First slot
+      description: First slot number to swap.
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 4
+          step: 1
+          mode: box
+    slot_b:
+      name: Second slot
+      description: Second slot number to swap.
+      required: true
+      example: 2
+      selector:
+        number:
+          min: 1
+          max: 4
+          step: 1
+          mode: box
+unassign_spool:
+  name: Unassign spool
+  description: Unassign a slot on one printer. The spool goes back on the shelf.
+  fields:
+    printer_id:
+      name: Printer
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it.
+      required: true
+      example: flashforge-ad5x
+      selector:
+        text:
+    slot:
+      name: Slot
+      description: Slot number to unassign.
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 4
+          step: 1
+          mode: box
+add_spool:
+  name: Add spool
+  description: Create a new spool on the shelf for one printer. Load it into a slot afterwards with Assign spool.
+  fields:
+    printer_id:
+      name: Printer
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it.
+      required: true
+      example: flashforge-ad5x
+      selector:
+        text:
+    material:
+      name: Material
+      description: Filament material for the new spool (for example PLA).
+      required: true
+      example: PLA
+      selector:
+        text:
+    color:
+      name: Color
+      description: Filament color name for the new spool (for example White).
+      required: true
+      example: White
+      selector:
+        text:
+    grams:
+      name: Grams
+      description: Full starting weight of the new spool, in grams.
+      required: true
+      example: 1000
+      selector:
+        number:
+          min: 1
+          step: 1
+          mode: box
+    brand:
+      name: Brand
+      description: Optional filament brand or vendor for the new spool.
+      required: false
+      example: Sunlu
+      selector:
+        text:
+    hex:
+      name: Color code
+      description: Optional hex color code for the new spool, without a leading hash (for example 0C6283).
+      required: false
+      example: 0C6283
+      selector:
+        text:
+sync_spools:
+  name: Sync spools
+  description: Reconcile one printer's slot state with Spoolman.
+  fields:
+    printer_id:
+      name: Printer
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it.
+      required: true
+      example: flashforge-ad5x
+      selector:
+        text:

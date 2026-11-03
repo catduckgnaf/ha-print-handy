@@ -24,9 +24,11 @@ from .entity import PrintHandyEntity, PrintHandyPrinterEntity
 from .model import (
     PrinterInfo,
     PrinterStatus,
+    SlotSpool,
     active_ams_tray,
     ams_trays,
     has_ams_filament,
+    slot_spool_attributes,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -226,6 +228,19 @@ async def async_setup_entry(
                 entities.append(
                     PrintHandyPrinterFilamentSensor(coordinator, entry, printer)
                 )
+            # One spool sensor per slot (#789), created only when the
+            # first poll actually carries a spools view for this
+            # printer — a Print Handy without the spools endpoint (or
+            # with Spoolman unreachable there) yields the unavailable
+            # view and gains no dead slot entities.
+            view = coordinator.data.spool_view(printer.printer_id)
+            if view is not None and view.available:
+                entities.extend(
+                    PrintHandyPrinterSlotSpoolSensor(
+                        coordinator, entry, printer, row.slot
+                    )
+                    for row in view.slots
+                )
     async_add_entities(entities)
 
 
@@ -339,6 +354,54 @@ class PrintHandyPrinterFilamentSensor(PrintHandyPrinterEntity, SensorEntity):
         attrs["external_spool"] = external if isinstance(external, dict) else None
         attrs["filament_backup"] = status.ams.get("filament_backup")
         return attrs
+
+
+class PrintHandyPrinterSlotSpoolSensor(PrintHandyPrinterEntity, SensorEntity):
+    """The spool assigned to one slot of one printer (#789).
+
+    State is the assigned spool's name (no state when the slot is
+    empty); material, color and remaining weight ride as attributes,
+    following the grouped-data pattern of the AMS filament sensor.
+    The data is the coordinator poll's spools view — Spoolman owns
+    the spool records and Print Handy owns the slot assignment; this
+    sensor stores nothing of its own.
+    """
+
+    def __init__(
+        self,
+        coordinator: PrintHandyDataUpdateCoordinator,
+        entry: PrintHandyConfigEntry,
+        printer: PrinterInfo,
+        slot: int,
+    ) -> None:
+        """Initialize."""
+        super().__init__(coordinator, entry, printer)
+        self._slot = slot
+        self._attr_name = f"Slot {slot} spool"
+        self._attr_icon = "mdi:tray-full"
+        self._attr_unique_id = (
+            f"{coordinator.client.base_url}:printer:{printer.printer_id}"
+            f":slot_{slot}_spool"
+        )
+
+    @property
+    def slot_row(self) -> SlotSpool | None:
+        """The current slot row from the poll, or None if not reported."""
+        view = self.spool_view
+        return view.slot(self._slot) if view is not None else None
+
+    @property
+    def native_value(self) -> str | None:
+        """The assigned spool's name, or None when the slot is empty."""
+        row = self.slot_row
+        if row is None or row.spool is None:
+            return None
+        return row.spool.name or None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Slot, spool id, material, color and remaining weight."""
+        return slot_spool_attributes(self.spool_view, self._slot)
 
 
 class PrintHandyInstanceSensor(PrintHandyEntity, SensorEntity):

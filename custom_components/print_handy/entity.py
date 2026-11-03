@@ -8,7 +8,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import PrintHandyConfigEntry
 from .const import DOMAIN, NAME
 from .coordinator import PrintHandyDataUpdateCoordinator
-from .model import PrinterInfo, PrinterStatus
+from .model import PrinterInfo, PrinterSpools, PrinterStatus
 
 
 def instance_device_info(coordinator: PrintHandyDataUpdateCoordinator) -> DeviceInfo:
@@ -85,6 +85,13 @@ class PrintHandyPrinterEntity(CoordinatorEntity[PrintHandyDataUpdateCoordinator]
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.status(self._printer_id)
+
+    @property
+    def spool_view(self) -> PrinterSpools | None:
+        """The current spools view for this printer, or None if not polled."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.spool_view(self._printer_id)
 
     @property
     def available(self) -> bool:

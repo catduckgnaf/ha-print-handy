@@ -33,6 +33,10 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
     from /api/printers/<id>/status into the same snapshot, so all
     devices read from this single update. A printer whose status poll
     fails carries its unavailable status instead of failing the update.
+    The same poll also fetches each printer's spools view from
+    /api/printers/<id>/spools (#789) into the snapshot — no second
+    poller, and no spool state is stored in the integration beyond
+    this poll.
     """
 
     config_entry: ConfigEntry
@@ -62,14 +66,14 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
         """Fetch the latest snapshot plus every printer's live status."""
         try:
             snapshot = await self.client.async_get_status()
-            statuses = await self.client.async_get_printer_statuses(
-                [printer.printer_id for printer in snapshot.printers]
-            )
+            printer_ids = [printer.printer_id for printer in snapshot.printers]
+            statuses = await self.client.async_get_printer_statuses(printer_ids)
+            spools = await self.client.async_get_printer_spool_views(printer_ids)
         except PrintHandyAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except PrintHandyConnectionError as err:
             raise UpdateFailed(str(err)) from err
-        return dataclasses.replace(snapshot, statuses=statuses)
+        return dataclasses.replace(snapshot, statuses=statuses, spools=spools)
 
     async def async_control_printer(self, printer_id: str, action: str) -> None:
         """Send a pause / resume / cancel action to one printer.
@@ -106,3 +110,70 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
         except PrintHandyApiError as err:
             raise HomeAssistantError(str(err)) from err
         await self.async_request_refresh()
+
+    async def _async_spool_call(self, printer_id: str, coro) -> dict:
+        """Run one spool action, failing visibly, then refresh.
+
+        Same failure contract as the control methods: any API failure
+        — a named spool refusal (controls off, unknown spool or slot,
+        a conflict), an unreachable Web UI, a rejected token — becomes
+        a HomeAssistantError carrying the API's reason, so a service
+        call never appears to succeed when Print Handy refused it.
+        """
+        try:
+            result = await coro
+        except PrintHandyApiError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self.async_request_refresh()
+        return result if isinstance(result, dict) else {}
+
+    async def async_assign_spool(
+        self, printer_id: str, slot: int, spool_id: int
+    ) -> dict:
+        """Assign one spool to one slot of one printer (#789)."""
+        return await self._async_spool_call(
+            printer_id, self.client.async_assign_spool(printer_id, slot, spool_id)
+        )
+
+    async def async_swap_spools(
+        self, printer_id: str, slot_a: int, slot_b: int
+    ) -> dict:
+        """Swap the spools in two slots of one printer (#789)."""
+        return await self._async_spool_call(
+            printer_id, self.client.async_swap_spools(printer_id, slot_a, slot_b)
+        )
+
+    async def async_unassign_spool(self, printer_id: str, slot: int) -> dict:
+        """Unassign one slot of one printer; the spool goes on the shelf."""
+        return await self._async_spool_call(
+            printer_id, self.client.async_unassign_spool(printer_id, slot)
+        )
+
+    async def async_add_spool(
+        self,
+        printer_id: str,
+        *,
+        material: str,
+        color: str,
+        grams: float,
+        brand: str | None = None,
+        hex: str | None = None,  # noqa: A002 - the API's own field name
+    ) -> dict:
+        """Create one spool on the shelf through the API's add action."""
+        return await self._async_spool_call(
+            printer_id,
+            self.client.async_add_spool(
+                printer_id,
+                material=material,
+                color=color,
+                grams=grams,
+                brand=brand,
+                hex=hex,
+            ),
+        )
+
+    async def async_sync_spools(self, printer_id: str) -> dict:
+        """Reconcile one printer's slot state with Spoolman (#789)."""
+        return await self._async_spool_call(
+            printer_id, self.client.async_sync_spools(printer_id)
+        )
