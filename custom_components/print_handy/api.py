@@ -17,6 +17,14 @@ control POSTs (403/404), and this client raises
 :class:`PrintHandyControlRefusedError` so the refusal surfaces as a
 visible failure in Home Assistant instead of a silent no-op.
 
+The spool surface (Print Handy #789) follows the same posture:
+``GET /api/printers/<id>/spools`` is read in the same poll as the
+status endpoints, and ``POST /api/printers/<id>/spools/{assign,swap,
+unassign,add,sync}`` sits behind the same controls gate. A refused
+spool action (controls off, unknown spool or slot, a reconcile
+conflict, a bad body) raises :class:`PrintHandySpoolRefusedError`
+carrying the server's named reason.
+
 The client duck-types the aiohttp session (anything with ``get()`` /
 ``post()`` returning an async context manager whose response has
 ``status`` and ``json()``), which keeps it testable without Home
@@ -32,17 +40,23 @@ from urllib.parse import quote
 
 from .const import (
     CONTROL_PATHS,
+    PRINTER_SPOOL_ACTION_PATH,
+    PRINTER_SPOOLS_PATH,
     PRINTER_STATUS_PATH,
     PRINTER_TARGET_PATH,
     REQUEST_TIMEOUT,
+    SPOOL_ACTIONS,
     STATUS_PATH,
     TOKEN_HEADER,
 )
 from .model import (
+    PrinterSpools,
     PrinterStatus,
     Snapshot,
     parse_printer_status,
     parse_snapshot,
+    parse_spools_view,
+    unavailable_spools,
     unavailable_status,
 )
 
@@ -68,6 +82,16 @@ class PrintHandyControlRefusedError(PrintHandyApiError):
     control endpoints are off by default until the operator enables
     them. A 404 can also mean the printer id is unknown or the Print
     Handy build predates the control API.
+    """
+
+
+class PrintHandySpoolRefusedError(PrintHandyApiError):
+    """Print Handy refused a spool action, naming the reason (#789).
+
+    Covers every named refusal the spool API sends: the controls gate
+    (403), an unknown printer or spool (404), a bad body (400), a
+    spool conflict (409) and a Spoolman transport failure the server
+    reports as 502. The server's ``reason`` is carried in the message.
     """
 
 
@@ -265,3 +289,165 @@ class PrintHandyApiClient:
             f"setting target temperatures for printer '{printer_id}'",
             json_body=body,
         )
+
+    async def async_get_printer_spools(self, printer_id: str) -> PrinterSpools:
+        """Fetch and parse GET /api/printers/<id>/spools for one printer.
+
+        A 404 (unknown id, or a Print Handy too old to have the spools
+        endpoint) is data, not an error: it yields the explicit
+        unavailable view, matching the per-printer status treatment.
+        """
+        path = PRINTER_SPOOLS_PATH.format(printer_id=quote(printer_id, safe=""))
+        status, body = await self._async_get_json(f"{self.base_url}{path}")
+        if status == 404:
+            reason = ""
+            if isinstance(body, dict):
+                reason = str(body.get("reason") or "")
+            return unavailable_spools(
+                printer_id, reason or "Print Handy reports no such printer"
+            )
+        if status != 200:
+            raise PrintHandyApiError(f"Print Handy Web UI returned HTTP {status}")
+        return parse_spools_view(body, printer_id)
+
+    async def async_get_printer_spool_views(
+        self, printer_ids: list[str]
+    ) -> dict[str, PrinterSpools]:
+        """Fetch every roster printer's spools view, tolerating failures.
+
+        Mirrors async_get_printer_statuses: one printer failing yields
+        that printer's unavailable view and never fails the batch;
+        only an auth rejection (401) propagates.
+        """
+
+        async def _one(printer_id: str) -> PrinterSpools:
+            try:
+                return await self.async_get_printer_spools(printer_id)
+            except PrintHandyAuthError:
+                raise
+            except PrintHandyApiError as err:
+                LOGGER.debug("Spools for printer %s failed: %s", printer_id, err)
+                return unavailable_spools(printer_id, str(err))
+            except Exception as err:  # parse/transport failure for this printer
+                LOGGER.debug("Spools for printer %s failed: %s", printer_id, err)
+                return unavailable_spools(printer_id, f"{type(err).__name__}: {err}")
+
+        results = await asyncio.gather(
+            *(_one(printer_id) for printer_id in printer_ids),
+            return_exceptions=True,
+        )
+        views: dict[str, PrinterSpools] = {}
+        for printer_id, result in zip(printer_ids, results, strict=True):
+            if isinstance(result, PrintHandyAuthError):
+                raise result
+            if isinstance(result, PrinterSpools):
+                views[printer_id] = result
+            else:  # pragma: no cover - _one already converts these
+                views[printer_id] = unavailable_spools(
+                    printer_id, f"{type(result).__name__}: {result}"
+                )
+        return views
+
+    async def _async_post_spool(
+        self, printer_id: str, action: str, json_body: Any = None
+    ) -> dict[str, Any]:
+        """POST one spool action, mapping named refusals to an error.
+
+        Any 2xx returns the decoded body. Any other status whose body
+        carries the spool API's ``reason`` raises
+        PrintHandySpoolRefusedError with that reason (the controls
+        gate, unknown spool or slot, a conflict and validation all
+        refuse this way); a refusal without a reason, and any other
+        failure, raises as elsewhere in this client.
+        """
+        if action not in SPOOL_ACTIONS:
+            raise ValueError(f"unknown spool action: {action!r}")
+        path = PRINTER_SPOOL_ACTION_PATH.format(
+            printer_id=quote(printer_id, safe=""), action=action
+        )
+        what = f"the spool {action} action for printer '{printer_id}'"
+        status, body = await self._async_request_json(
+            "post", f"{self.base_url}{path}", json_body
+        )
+        if 200 <= status < 300:
+            return body if isinstance(body, dict) else {}
+        reason = ""
+        if isinstance(body, dict):
+            reason = str(body.get("reason") or "")
+        if reason:
+            raise PrintHandySpoolRefusedError(
+                f"Print Handy refused {what} (HTTP {status}): {reason}"
+            )
+        if status in (400, 403, 404, 409, 502):
+            raise PrintHandySpoolRefusedError(
+                f"Print Handy refused {what} (HTTP {status})"
+            )
+        raise PrintHandyApiError(
+            f"Print Handy Web UI returned HTTP {status} for {what}"
+        )
+
+    async def async_assign_spool(
+        self, printer_id: str, slot: int, spool_id: int
+    ) -> dict[str, Any]:
+        """POST assign: bind ``spool_id`` to ``slot`` on one printer.
+
+        A spool already in the slot goes back on the shelf (the API's
+        bind behavior). Refusals raise PrintHandySpoolRefusedError.
+        """
+        return await self._async_post_spool(
+            printer_id, "assign", {"slot": int(slot), "spool_id": int(spool_id)}
+        )
+
+    async def async_swap_spools(
+        self, printer_id: str, slot_a: int, slot_b: int
+    ) -> dict[str, Any]:
+        """POST swap: exchange the spools in two slots of one printer."""
+        return await self._async_post_spool(
+            printer_id,
+            "swap",
+            {"slot_a": int(slot_a), "slot_b": int(slot_b)},
+        )
+
+    async def async_unassign_spool(
+        self, printer_id: str, slot: int
+    ) -> dict[str, Any]:
+        """POST unassign: clear one slot; its spool goes on the shelf."""
+        return await self._async_post_spool(
+            printer_id, "unassign", {"slot": int(slot)}
+        )
+
+    async def async_add_spool(
+        self,
+        printer_id: str,
+        *,
+        material: str,
+        color: str,
+        grams: float,
+        brand: str | None = None,
+        hex: str | None = None,  # noqa: A002 - the API's own field name
+    ) -> dict[str, Any]:
+        """POST add: create one spool on the shelf for one printer.
+
+        Maps directly onto the API's add action (the #512 creation
+        path): material, color and the full starting weight in grams
+        are required there, brand and hex are optional and are only
+        sent when given. Loading the new spool into a slot is a
+        separate assign, exactly as on the Print Handy side.
+        """
+        body: dict[str, Any] = {
+            "material": material,
+            "color": color,
+            "grams": float(grams),
+        }
+        if brand:
+            body["brand"] = brand
+        if hex:
+            body["hex"] = hex
+        return await self._async_post_spool(printer_id, "add", body)
+
+    async def async_sync_spools(self, printer_id: str) -> dict[str, Any]:
+        """POST sync: reconcile one printer's slot state with Spoolman.
+
+        The API's sync action takes no body.
+        """
+        return await self._async_post_spool(printer_id, "sync", None)

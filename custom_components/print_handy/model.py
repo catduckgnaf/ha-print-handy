@@ -24,6 +24,15 @@ where the adapter provides them ``hotend_target_c``, ``bed_target_c``,
 ``total_layer``, Elegoo SDCP ``total_layers``), and vendor extras such as
 Bambu's decoded ``ams`` block. A printer whose live read fails still
 answers 200 with ``status.state == "unavailable"`` and a ``detail``.
+
+Spool assignment comes from ``GET /api/printers/<id>/spools`` (Print
+Handy #789, parsed by :func:`parse_spools_view` below): the body is
+``{ok, id, name, model, slots, shelf, spools, conflicts}`` where each
+slot row is ``{slot, spool}`` with ``spool`` either null (empty) or a
+spool summary ``{id, name, color, material, brand, color_hex,
+remaining_weight, initial_weight, remaining_percent, archived,
+location}``. A percent is present only when the spool's starting
+weight is recorded — never estimated.
 """
 
 from __future__ import annotations
@@ -183,12 +192,186 @@ def has_ams_filament(status: PrinterStatus) -> bool:
 
 
 @dataclass(frozen=True)
+class SpoolSummary:
+    """One spool as the spools endpoint summarizes it (#789).
+
+    Identity comes from the Spoolman filament record (its name is the
+    color name); ``remaining_percent`` is None when the spool's
+    starting weight is not recorded — never estimated.
+    """
+
+    spool_id: int | None = None
+    name: str = ""
+    color: str = ""
+    material: str = ""
+    brand: str | None = None
+    color_hex: str | None = None
+    remaining_weight: float | None = None
+    initial_weight: float | None = None
+    remaining_percent: float | None = None
+    archived: bool = False
+    location: str | None = None
+
+
+@dataclass(frozen=True)
+class SlotSpool:
+    """One slot of one printer and the spool assigned to it, if any."""
+
+    slot: int
+    spool: SpoolSummary | None = None
+
+
+@dataclass(frozen=True)
+class PrinterSpools:
+    """One printer's spools view from GET /api/printers/<id>/spools.
+
+    ``available`` is False for the explicit unavailable view built when
+    Print Handy cannot serve the endpoint for this printer (unknown
+    id, or a build that predates #789); ``detail`` then names why.
+    """
+
+    printer_id: str
+    name: str = ""
+    model: str = ""
+    slots: tuple[SlotSpool, ...] = ()
+    shelf: tuple[SpoolSummary, ...] = ()
+    spools: tuple[SpoolSummary, ...] = ()
+    conflicts: tuple[str, ...] = ()
+    available: bool = True
+    detail: str = ""
+
+    def slot(self, slot: int) -> SlotSpool | None:
+        """Return one slot row by slot number, or None if not reported."""
+        for row in self.slots:
+            if row.slot == slot:
+                return row
+        return None
+
+
+def _spool_id(value: Any) -> int | None:
+    number = _number(value)
+    return int(number) if number is not None else None
+
+
+def _parse_spool_summary(raw: Any) -> SpoolSummary | None:
+    if not isinstance(raw, dict):
+        return None
+    brand = raw.get("brand")
+    color_hex = raw.get("color_hex")
+    location = raw.get("location")
+    return SpoolSummary(
+        spool_id=_spool_id(raw.get("id")),
+        name=str(raw.get("name") or ""),
+        color=str(raw.get("color") or ""),
+        material=str(raw.get("material") or ""),
+        brand=str(brand) if brand else None,
+        color_hex=str(color_hex) if color_hex else None,
+        remaining_weight=_number(raw.get("remaining_weight")),
+        initial_weight=_number(raw.get("initial_weight")),
+        remaining_percent=_number(raw.get("remaining_percent")),
+        archived=raw.get("archived") is True,
+        location=str(location) if location else None,
+    )
+
+
+def parse_spools_view(raw: Any, printer_id: str = "") -> PrinterSpools:
+    """Parse a decoded /api/printers/<id>/spools body.
+
+    Raises TypeError when the body is not an object carrying a
+    ``slots`` list. Rows that are not objects, and slots without a
+    whole-number slot number, are skipped rather than guessed at.
+    """
+    if not isinstance(raw, dict):
+        raise TypeError("spools body is not a JSON object")
+    raw_slots = raw.get("slots")
+    if not isinstance(raw_slots, list):
+        raise TypeError("spools body has no slots list")
+    slots: list[SlotSpool] = []
+    for row in raw_slots:
+        if not isinstance(row, dict):
+            continue
+        slot_number = _count(row.get("slot"))
+        if slot_number is None:
+            continue
+        spool_raw = row.get("spool")
+        spool = _parse_spool_summary(spool_raw) if isinstance(spool_raw, dict) else None
+        slots.append(SlotSpool(slot=slot_number, spool=spool))
+    shelf = tuple(
+        summary
+        for summary in (_parse_spool_summary(row) for row in raw.get("shelf") or [])
+        if summary is not None
+    ) if isinstance(raw.get("shelf"), list) else ()
+    spools = tuple(
+        summary
+        for summary in (_parse_spool_summary(row) for row in raw.get("spools") or [])
+        if summary is not None
+    ) if isinstance(raw.get("spools"), list) else ()
+    conflicts_raw = raw.get("conflicts")
+    conflicts = (
+        tuple(str(row) for row in conflicts_raw if isinstance(row, str))
+        if isinstance(conflicts_raw, list)
+        else ()
+    )
+    return PrinterSpools(
+        printer_id=str(raw.get("id") or printer_id),
+        name=str(raw.get("name") or ""),
+        model=str(raw.get("model") or ""),
+        slots=tuple(slots),
+        shelf=shelf,
+        spools=spools,
+        conflicts=conflicts,
+    )
+
+
+def unavailable_spools(printer_id: str, detail: str) -> PrinterSpools:
+    """Build the explicit unavailable spools view for one printer."""
+    return PrinterSpools(printer_id=printer_id, available=False, detail=detail)
+
+
+def slot_spool_attributes(view: PrinterSpools | None, slot: int) -> dict[str, Any]:
+    """Return the grouped attributes for one slot's spool sensor.
+
+    The sensor's state is the spool name; material, color and
+    remaining weight ride as attributes (the grouped-data pattern
+    DESIGN.md records for the AMS filament sensor). An empty slot
+    still reports its slot number and a null spool id, and any
+    conflicts the view names ride along so they are visible.
+    """
+    attrs: dict[str, Any] = {"slot": slot, "spool_id": None}
+    if view is None:
+        return attrs
+    if view.conflicts:
+        attrs["conflicts"] = list(view.conflicts)
+    row = view.slot(slot)
+    spool = row.spool if row is not None else None
+    if spool is None:
+        return attrs
+    attrs.update(
+        {
+            "spool_id": spool.spool_id,
+            "spool_name": spool.name or None,
+            "material": spool.material or None,
+            "color": spool.color or None,
+            "color_hex": spool.color_hex,
+            "brand": spool.brand,
+            "remaining_weight": spool.remaining_weight,
+            "initial_weight": spool.initial_weight,
+            "remaining_percent": spool.remaining_percent,
+            "archived": spool.archived,
+            "location": spool.location,
+        }
+    )
+    return attrs
+
+
+@dataclass(frozen=True)
 class Snapshot:
     """A parsed /api/status response, plus per-printer live statuses."""
 
     instance: InstanceInfo
     printers: tuple[PrinterInfo, ...] = field(default_factory=tuple)
     statuses: dict[str, PrinterStatus] = field(default_factory=dict)
+    spools: dict[str, PrinterSpools] = field(default_factory=dict)
 
     def printer(self, printer_id: str) -> PrinterInfo | None:
         """Look up one printer by roster id."""
@@ -200,6 +383,10 @@ class Snapshot:
     def status(self, printer_id: str) -> PrinterStatus | None:
         """Return the live status for one printer, or None if it was not polled."""
         return self.statuses.get(printer_id)
+
+    def spool_view(self, printer_id: str) -> PrinterSpools | None:
+        """Return the spools view for one printer, or None if not polled."""
+        return self.spools.get(printer_id)
 
 
 def _as_bool(value: Any) -> bool:
