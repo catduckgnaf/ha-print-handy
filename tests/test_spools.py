@@ -22,6 +22,7 @@ from custom_components.print_handy.const import DOMAIN  # noqa: E402
 from custom_components.print_handy.model import (  # noqa: E402
     parse_snapshot,
     parse_spools_view,
+    unavailable_spools,
     unavailable_status,
 )
 from tests.test_spool_model import SPOOLS_BODY  # noqa: E402
@@ -296,3 +297,57 @@ async def test_service_for_an_unknown_printer_raises(hass: HomeAssistant):
                 blocking=True,
             )
         assert "ghost" in str(excinfo.value)
+
+
+async def test_slot_sensors_go_unavailable_when_the_spool_poll_fails(
+    hass: HomeAssistant,
+):
+    """A failed spool read reads as unavailable, never as cleared slots."""
+    with patch(
+        "custom_components.print_handy.coordinator.PrintHandyApiClient",
+        FakeApiClient,
+    ):
+        entry = await _setup(hass)
+        assert _slot_state(hass, 1) is not None
+
+        async def _down(self, printer_ids):
+            return {
+                printer_id: unavailable_spools(printer_id, "fake down")
+                for printer_id in printer_ids
+            }
+
+        with patch.object(
+            FakeApiClient, "async_get_printer_spool_views", _down
+        ):
+            await entry.runtime_data.async_refresh()
+            await hass.async_block_till_done()
+        assert _slot_state(hass, 1).state == "unavailable"
+
+
+async def test_service_for_a_printer_on_two_instances_is_refused(
+    hass: HomeAssistant,
+):
+    """The same printer id on two instances is ambiguous, never first-match."""
+    with patch(
+        "custom_components.print_handy.coordinator.PrintHandyApiClient",
+        FakeApiClient,
+    ):
+        await _setup(hass)
+        second = MockConfigEntry(
+            domain=DOMAIN,
+            data={"url": "http://ph2.local:8080", "token": "sekrit"},
+            unique_id="http://ph2.local:8080",
+        )
+        second.add_to_hass(hass)
+        await hass.config_entries.async_setup(second.entry_id)
+        await hass.async_block_till_done()
+        with pytest.raises(HomeAssistantError) as excinfo:
+            await hass.services.async_call(
+                DOMAIN,
+                "assign_spool",
+                {"printer_id": "flashforge-ad5x", "slot": 1, "spool_id": 7},
+                blocking=True,
+            )
+        assert "more than one configured" in str(excinfo.value)
+        for client in FakeApiClient.instances:
+            assert client.spool_calls == []

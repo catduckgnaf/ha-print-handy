@@ -385,6 +385,18 @@ class PrintHandyPrinterSlotSpoolSensor(PrintHandyPrinterEntity, SensorEntity):
         )
 
     @property
+    def available(self) -> bool:
+        """Unavailable when the spools poll itself failed for this printer.
+
+        The coordinator substitutes an explicit unavailable view when a
+        spool read fails; without this override the sensor would report
+        the same empty state as a genuinely unassigned slot, and a
+        Spoolman outage would look like every slot was cleared.
+        """
+        view = self.spool_view
+        return super().available and view is not None and view.available
+
+    @property
     def slot_row(self) -> SlotSpool | None:
         """The current slot row from the poll, or None if not reported."""
         view = self.spool_view

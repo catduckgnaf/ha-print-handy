@@ -95,10 +95,25 @@ def _coordinator_for_printer(
         runtime_data = getattr(entry, "runtime_data", None)
         if isinstance(runtime_data, PrintHandyDataUpdateCoordinator):
             coordinators.append(runtime_data)
-    for coordinator in coordinators:
-        data = coordinator.data
-        if data is not None and data.printer(printer_id) is not None:
-            return coordinator
+    matches = [
+        coordinator for coordinator in coordinators
+        if coordinator.data is not None
+        and coordinator.data.printer(printer_id) is not None
+    ]
+    if len(matches) > 1:
+        # Printer ids are only unique within one Print Handy instance
+        # (entities disambiguate by base URL for the same reason): with
+        # the same id on two configured instances there is no honest
+        # first match, so refuse by name instead of silently acting on
+        # one instance's spools.
+        raise HomeAssistantError(
+            f"Printer id '{printer_id}' exists on more than one configured "
+            "Print Handy instance; the spool services cannot tell which one "
+            "is meant, so nothing was changed. Rename the printer on one "
+            "instance, or use that instance's Web UI."
+        )
+    if matches:
+        return matches[0]
     if len(coordinators) == 1 and (
         coordinators[0].data is None or not coordinators[0].data.printers
     ):
