@@ -131,6 +131,34 @@
           "description": "The Print Handy printer id, exactly as Print Handy names it."
         }
       }
+    },
+    "send_gcode": {
+      "name": "Send G-code",
+      "description": "Send a G-code script to one printer, through Print Handy's control API.",
+      "fields": {
+        "printer_id": {
+          "name": "Printer",
+          "description": "The Print Handy printer id, exactly as Print Handy names it."
+        },
+        "script": {
+          "name": "Script",
+          "description": "The G-code script text to send to the printer."
+        }
+      }
+    },
+    "exclude_object": {
+      "name": "Exclude object",
+      "description": "Exclude one object from the print running on one printer, by object name.",
+      "fields": {
+        "printer_id": {
+          "name": "Printer",
+          "description": "The Print Handy printer id, exactly as Print Handy names it."
+        },
+        "object": {
+          "name": "Object",
+          "description": "Name of the object to exclude, exactly as the Current object sensor lists it."
+        }
+      }
     }
   }
 }

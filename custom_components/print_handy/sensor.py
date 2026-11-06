@@ -197,6 +197,23 @@ PRINTER_SENSORS: tuple[PrintHandyPrinterSensorEntityDescription, ...] = (
         value_fn=lambda status: status.total_layers,
         present_fn=lambda status: status.total_layers is not None,
     ),
+    # Issue-#1 remainder (0.5.0): gated on object data like the
+    # targets, but checked on every poll, not just the first (see
+    # async_setup_entry) — object data only exists while a print
+    # runs, so a printer whose Print Handy reports no objects (or a
+    # build that predates the object fields) gains no dead sensor,
+    # and one that starts a print later gains the sensor then.
+    PrintHandyPrinterSensorEntityDescription(
+        key="current_object",
+        name="Current object",
+        icon="mdi:cube-outline",
+        value_fn=lambda status: status.current_object,
+        present_fn=lambda status: bool(status.objects or status.current_object),
+    ),
+)
+
+CURRENT_OBJECT_DESCRIPTION = next(
+    description for description in PRINTER_SENSORS if description.key == "current_object"
 )
 
 
@@ -243,6 +260,41 @@ async def async_setup_entry(
                 )
     async_add_entities(entities)
 
+    # The current-object sensor is the one gated entity whose data
+    # is not a standing printer property: objects exist only while a
+    # print runs, so a printer idle at setup would never gain the
+    # sensor under first-poll gating alone (Codex review, PR #8).
+    # Watch every poll instead and add it the first time a printer's
+    # status actually carries object data; printers that never
+    # report objects still gain no dead sensor.
+    added_current_object: set[str] = set()
+    if coordinator.data is not None:
+        for printer in coordinator.data.printers:
+            status = coordinator.data.status(printer.printer_id)
+            if status is not None and CURRENT_OBJECT_DESCRIPTION.present_fn(status):
+                added_current_object.add(printer.printer_id)
+
+    def _add_current_object_when_ready() -> None:
+        if coordinator.data is None:
+            return
+        new_entities: list[SensorEntity] = []
+        for printer in coordinator.data.printers:
+            if printer.printer_id in added_current_object:
+                continue
+            status = coordinator.data.status(printer.printer_id)
+            if status is None or not CURRENT_OBJECT_DESCRIPTION.present_fn(status):
+                continue
+            added_current_object.add(printer.printer_id)
+            new_entities.append(
+                PrintHandyPrinterStatusSensor(
+                    coordinator, entry, printer, CURRENT_OBJECT_DESCRIPTION
+                )
+            )
+        if new_entities:
+            async_add_entities(new_entities)
+
+    entry.async_on_unload(coordinator.async_add_listener(_add_current_object_when_ready))
+
 
 class PrintHandyPrinterStatusSensor(PrintHandyPrinterEntity, SensorEntity):
     """One sensor reading a field of this printer's live status."""
@@ -273,11 +325,22 @@ class PrintHandyPrinterStatusSensor(PrintHandyPrinterEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """The current-state sensor also carries filename and any detail."""
-        if self.entity_description.key != "current_state":
-            return {}
+        """Grouped attributes for the sensors that carry them.
+
+        The current-state sensor carries filename and any detail; the
+        current-object sensor carries the full object list and the
+        excluded list, so cards and the exclude_object service's
+        callers can see every object's name, not just the current one.
+        """
         status = self.status
         if status is None:
+            return {}
+        if self.entity_description.key == "current_object":
+            return {
+                "objects": list(status.objects),
+                "excluded_objects": list(status.excluded_objects),
+            }
+        if self.entity_description.key != "current_state":
             return {}
         attrs: dict[str, Any] = {"filename": status.filename}
         if status.detail:

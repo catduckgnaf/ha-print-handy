@@ -2,7 +2,7 @@
 
 A Home Assistant custom integration for [Print Handy](https://github.com/catduckgnaf/print-handy) — every printer Print Handy manages, in one integration, instead of a separate Moonraker, OctoPrint or vendor integration per printer.
 
-## What it does today (0.4.0)
+## What it does today (0.5.0)
 
 The integration polls the Print Handy Web UI's status API (`GET /api/status` for the instance and roster, `GET /api/printers/<id>/status` for each printer's live status, `GET /api/printers/<id>/spools` for each printer's spool assignments) and creates:
 
@@ -11,6 +11,8 @@ The integration polls the Print Handy Web UI's status API (`GET /api/status` for
   - **Print progress** (%) and **Filename** sensors.
   - **Nozzle temperature** and **Bed temperature** sensors, plus **Nozzle target temperature** / **Bed target temperature** sensors on printers whose adapter reports targets (Bambu, Elegoo SDCP, PrusaLink).
   - **Pause**, **Resume** and **Cancel** buttons (phase 3) — one set per printer, acting only on that printer.
+  - **Emergency stop**, **Firmware restart** and **Server restart** buttons (0.5.0, issue #1) — one set per printer, acting only on that printer, each sending Print Handy's confirm body like Cancel does. A printer family with no such capability refuses on the Print Handy side and the press fails visibly here.
+  - **Current object** sensor (0.5.0, issue #1) — the object currently printing, with the full object list and the excluded objects as attributes, so cards and automations can see every object's name. Object data only exists while a print runs, so the sensor is created the first time a poll reports it (a printer idle at startup gains it when its print starts); printers that never report objects gain no sensor.
   - **Nozzle target temperature** / **Bed target temperature** numbers (phase 3) — writable versions of the target sensors, created only on printers whose adapter reports targets; the read-only sensors stay for history and cards.
   - **Estimated finish time** (timestamp) and **Time remaining** sensors on printers that report remaining time.
   - **Current layer** / **Total layers** sensors where the adapter reports layers (Bambu, Elegoo SDCP).
@@ -23,7 +25,14 @@ The integration polls the Print Handy Web UI's status API (`GET /api/status` for
   - **Status** sensor (`ok` / `problem`), **Version** and **Doctor failures** diagnostic sensors.
   - **Bot connected** and **Spoolman connected** connectivity binary sensors.
 
-Entity ids use one fixed suffix vocabulary per printer (`_current_state`, `_print_progress`, `_filename`, `_nozzle_temperature`, `_bed_temperature`, `_estimated_finish_time`, `_current_layer`, `_slot_1_spool` … `_slot_4_spool`, ...), so dashboards and cards can hard-code them safely — see [DESIGN.md](DESIGN.md).
+Entity ids use one fixed suffix vocabulary per printer (`_current_state`, `_print_progress`, `_filename`, `_nozzle_temperature`, `_bed_temperature`, `_estimated_finish_time`, `_current_layer`, `_current_object`, `_slot_1_spool` … `_slot_4_spool`, plus button suffixes `_pause`, `_resume`, `_cancel`, `_emergency_stop`, `_firmware_restart`, `_server_restart`), so dashboards and cards can hard-code them safely — see [DESIGN.md](DESIGN.md).
+
+## Control services (0.5.0)
+
+Two services act on one named printer through Print Handy's control API (issue #1) — they act only on that printer, never on a default or fallback printer:
+
+- `print_handy.send_gcode` — fields: `printer_id`, `script`. Sends the G-code script text to that printer. Print Handy and the printer decide whether to honor it; a refusal fails the call visibly with Print Handy's reason.
+- `print_handy.exclude_object` — fields: `printer_id`, `object`. Excludes the named object (use the names on the **Current object** sensor) from the print running on that printer. Excluding the last remaining object is refused by Print Handy — its reason, carried into the failed call, says to cancel the print instead. An unknown object name is refused the same way.
 
 ## Spool services (0.4.0)
 
@@ -42,6 +51,8 @@ Not yet available: print thumbnails (Print Handy has no per-printer thumbnail so
 Requires a Print Handy build with the per-printer status endpoint (Print Handy PR #667, for the first release after 2.2.1). Against an older Print Handy the roster and health entities above still work; the live job entities read `unavailable`.
 
 The phase-3 controls additionally require a Print Handy build with the control API (Print Handy issue #708) **and** controls enabled on the Print Handy side — they are off by default there, behind the operator's own setting. Against a Print Handy without the control API, or with controls disabled, the buttons and numbers are still created but every press or set fails visibly in Home Assistant with Print Handy's refusal; nothing fails silently.
+
+The 0.5.0 remainder (the Emergency stop / restart buttons, the `send_gcode` and `exclude_object` services, and the Current object sensor) additionally requires the companion Print Handy build that adds those endpoints (`POST /api/printers/<id>/emergency_stop|firmware_restart|server_restart|gcode|exclude`, plus `current_object` / `objects` / `excluded_objects` in the per-printer status) — see the pull request description for the companion Print Handy PR. Against an older Print Handy the new buttons and services fail visibly with Print Handy's refusal and the Current object sensor is not created; the rest of the integration works unchanged. The new buttons and services sit behind the same controls gate, so they also need controls enabled on the Print Handy side.
 
 The spool sensors and services additionally require a Print Handy build with the spool API (Print Handy issue #789). Against an older Print Handy the slot spool sensors are not created and the rest of the integration works unchanged; the spool services fail visibly with Print Handy's refusal. The spool writes share the controls gate above, so they also need controls enabled on the Print Handy side.
 
@@ -77,7 +88,7 @@ Copy `custom_components/print_handy/` into your Home Assistant `config/custom_co
 
 ## Notes
 
-- Polling is read-only; commands are sent only when you press a control button, set a target temperature or call a spool service, and only to Print Handy (never directly to a printer). Print Handy decides whether to honor them — its controls gate is off by default.
+- Polling is read-only; commands are sent only when you press a control button, set a target temperature or call a service (spool, `send_gcode` or `exclude_object`), and only to Print Handy (never directly to a printer). Print Handy decides whether to honor them — its controls gate is off by default.
 - The token is stored only in the config entry and sent only as the `X-WebUI-Token` header.
 - Print Handy's optional MQTT events (`print-handy/<event>`) work unchanged alongside this integration for automations that only need print started/finished notifications today.
 

@@ -4,7 +4,7 @@ from homeassistant.const import Platform
 
 NAME = "Print Handy"
 DOMAIN = "print_handy"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 ATTRIBUTION = "Data provided by Print Handy"
 ISSUE_URL = "https://github.com/catduckgnaf/ha-print-handy/issues"
 
@@ -36,13 +36,29 @@ PRINTER_PAUSE_PATH = "/api/printers/{printer_id}/pause"
 PRINTER_RESUME_PATH = "/api/printers/{printer_id}/resume"
 PRINTER_CANCEL_PATH = "/api/printers/{printer_id}/cancel"
 PRINTER_TARGET_PATH = "/api/printers/{printer_id}/target"
+# The issue-#1 remainder (0.5.0): emergency stop and the two restarts
+# are button actions behind the same controls gate, each requiring
+# the {"confirm": true} body like cancel; send-G-code and
+# exclude-object are services (below) on their own paths.
+PRINTER_EMERGENCY_STOP_PATH = "/api/printers/{printer_id}/emergency_stop"
+PRINTER_FIRMWARE_RESTART_PATH = "/api/printers/{printer_id}/firmware_restart"
+PRINTER_SERVER_RESTART_PATH = "/api/printers/{printer_id}/server_restart"
+PRINTER_GCODE_PATH = "/api/printers/{printer_id}/gcode"
+PRINTER_EXCLUDE_PATH = "/api/printers/{printer_id}/exclude"
 
 # The control actions the button platform exposes, by button key.
 CONTROL_PATHS = {
     "pause": PRINTER_PAUSE_PATH,
     "resume": PRINTER_RESUME_PATH,
     "cancel": PRINTER_CANCEL_PATH,
+    "emergency_stop": PRINTER_EMERGENCY_STOP_PATH,
+    "firmware_restart": PRINTER_FIRMWARE_RESTART_PATH,
+    "server_restart": PRINTER_SERVER_RESTART_PATH,
 }
+
+# Button actions Print Handy refuses without an explicit confirm body;
+# the button press itself is that confirmation.
+CONFIRM_ACTIONS = ("cancel", "emergency_stop", "firmware_restart", "server_restart")
 
 # Print Handy's Web UI spool API (Print Handy #789). The read surface
 # is ``GET /api/printers/<id>/spools``; the write surface is
@@ -68,6 +84,15 @@ SPOOL_SERVICES = (
     SERVICE_UNASSIGN_SPOOL,
     SERVICE_ADD_SPOOL,
     SERVICE_SYNC_SPOOLS,
+)
+
+# Issue-#1 remainder services (0.5.0), on the control API above.
+SERVICE_SEND_GCODE = "send_gcode"
+SERVICE_EXCLUDE_OBJECT = "exclude_object"
+
+CONTROL_SERVICES = (
+    SERVICE_SEND_GCODE,
+    SERVICE_EXCLUDE_OBJECT,
 )
 
 ATTR_ATTRIBUTION = "attribution"

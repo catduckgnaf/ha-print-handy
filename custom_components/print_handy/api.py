@@ -17,6 +17,19 @@ control POSTs (403/404), and this client raises
 :class:`PrintHandyControlRefusedError` so the refusal surfaces as a
 visible failure in Home Assistant instead of a silent no-op.
 
+The issue-#1 remainder (0.5.0) extends the same control surface:
+``emergency_stop`` / ``firmware_restart`` / ``server_restart`` join
+the button actions in :data:`CONTROL_PATHS` (each requiring the
+``{"confirm": true}`` body, like cancel), and two service actions
+join on their own paths — ``POST /api/printers/<id>/gcode`` with
+``{"script": ...}`` and ``POST /api/printers/<id>/exclude`` with
+``{"object": ..., "confirm": true}``. These are control actions
+behind the same gate, not spool actions, so their refusals raise
+:class:`PrintHandyControlRefusedError` (not the spool error) —
+including the exclude endpoint's named 409 refusals (unknown object,
+and the last remaining object, where the server's reason says to use
+cancel instead); that reason reaches Home Assistant verbatim.
+
 The spool surface (Print Handy #789) follows the same posture:
 ``GET /api/printers/<id>/spools`` is read in the same poll as the
 status endpoints, and ``POST /api/printers/<id>/spools/{assign,swap,
@@ -39,7 +52,10 @@ from typing import Any
 from urllib.parse import quote
 
 from .const import (
+    CONFIRM_ACTIONS,
     CONTROL_PATHS,
+    PRINTER_EXCLUDE_PATH,
+    PRINTER_GCODE_PATH,
     PRINTER_SPOOL_ACTION_PATH,
     PRINTER_SPOOLS_PATH,
     PRINTER_STATUS_PATH,
@@ -76,12 +92,17 @@ class PrintHandyConnectionError(PrintHandyApiError):
 
 
 class PrintHandyControlRefusedError(PrintHandyApiError):
-    """Print Handy refused a control action (HTTP 403/404).
+    """Print Handy refused a control action, naming the reason.
 
-    The usual cause is the controls gate on the Print Handy side:
-    control endpoints are off by default until the operator enables
-    them. A 404 can also mean the printer id is unknown or the Print
-    Handy build predates the control API.
+    Covers the named refusals the control API sends: the controls
+    gate (403), an unknown printer (404), a missing confirm or bad
+    body (400), a printer in the wrong state or — for exclude — the
+    last remaining object (409), and a printer family with no such
+    capability (501). The usual first cause is the controls gate on
+    the Print Handy side: control endpoints are off by default until
+    the operator enables them. A 404 can also mean the Print Handy
+    build predates the control API. The server's ``reason`` is
+    carried in the message.
     """
 
 
@@ -157,17 +178,20 @@ class PrintHandyApiClient:
     ) -> None:
         """POST a control action, mapping refusals to a dedicated error.
 
-        Any 2xx is success. A 403/404 means Print Handy refused the
-        action — controls are disabled there, the printer is unknown,
-        or the build predates the control API — and raises
-        PrintHandyControlRefusedError carrying the server's reason when
-        it sent one. Other statuses raise the generic API error; auth
-        and transport failures raise as everywhere else in this client.
+        Any 2xx is success. A 400/403/404/409/501 means Print Handy
+        refused the action — a bad or unconfirmed body, controls
+        disabled there, the printer is unknown, the printer is in the
+        wrong state (or, for exclude, the object cannot be excluded),
+        the family has no such capability, or the build predates the
+        control API — and raises PrintHandyControlRefusedError
+        carrying the server's reason when it sent one. Other statuses
+        raise the generic API error; auth and transport failures raise
+        as everywhere else in this client.
         """
         status, body = await self._async_request_json("post", url, json_body)
         if 200 <= status < 300:
             return
-        if status in (403, 404):
+        if status in (400, 403, 404, 409, 501):
             reason = ""
             if isinstance(body, dict):
                 reason = str(body.get("reason") or "")
@@ -246,8 +270,10 @@ class PrintHandyApiClient:
         return statuses
 
     async def async_printer_control(self, printer_id: str, action: str) -> None:
-        """POST a pause / resume / cancel action for one printer.
+        """POST a button control action for one printer.
 
+        Covers pause / resume / cancel plus the issue-#1 remainder
+        buttons (emergency_stop / firmware_restart / server_restart).
         Acts only on the named printer. Raises PrintHandyControlRefusedError
         when Print Handy refuses (controls disabled there, unknown
         printer, or a build without the control API), PrintHandyAuthError
@@ -258,13 +284,52 @@ class PrintHandyApiClient:
         if path_template is None:
             raise ValueError(f"unknown control action: {action!r}")
         path = path_template.format(printer_id=quote(printer_id, safe=""))
-        # Print Handy refuses cancel (400) without an explicit confirm; the
-        # Cancel button press is that confirmation. Pause and resume take no body.
-        body = {"confirm": True} if action == "cancel" else None
+        # Print Handy refuses the CONFIRM_ACTIONS (400) without an
+        # explicit confirm; the button press is that confirmation.
+        # Pause and resume take no body.
+        body = {"confirm": True} if action in CONFIRM_ACTIONS else None
         await self._async_post_control(
             f"{self.base_url}{path}",
             f"the {action} action for printer '{printer_id}'",
             body,
+        )
+
+    async def async_send_gcode(self, printer_id: str, script: str) -> None:
+        """POST a G-code script to one printer (issue #1, send_gcode).
+
+        The body is exactly the contract's ``{"script": ...}``; the
+        script goes to the named printer only, through Print Handy's
+        controls gate. Refusals raise PrintHandyControlRefusedError
+        carrying the server's reason — this is a control action, so
+        the control error is the fit, not the spool error. An empty
+        script is a programming error, refused before any POST.
+        """
+        if not str(script or "").strip():
+            raise ValueError("a G-code script is required")
+        path = PRINTER_GCODE_PATH.format(printer_id=quote(printer_id, safe=""))
+        await self._async_post_control(
+            f"{self.base_url}{path}",
+            f"sending G-code to printer '{printer_id}'",
+            {"script": script},
+        )
+
+    async def async_exclude_object(self, printer_id: str, object_name: str) -> None:
+        """POST an exclude-object request for one printer (issue #1).
+
+        The body carries the object name plus ``confirm: true`` — the
+        service call is that confirmation. Refusals raise
+        PrintHandyControlRefusedError carrying the server's reason
+        verbatim, including the 409 for the last remaining object
+        (where the reason says to use cancel instead) and for an
+        unknown object. An empty name is refused before any POST.
+        """
+        if not str(object_name or "").strip():
+            raise ValueError("an object name is required")
+        path = PRINTER_EXCLUDE_PATH.format(printer_id=quote(printer_id, safe=""))
+        await self._async_post_control(
+            f"{self.base_url}{path}",
+            f"excluding object '{object_name}' on printer '{printer_id}'",
+            {"object": object_name, "confirm": True},
         )
 
     async def async_set_printer_target(

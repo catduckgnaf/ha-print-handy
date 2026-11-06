@@ -7,6 +7,12 @@ for every printer family on the Print Handy side — but the control
 endpoints are gated by an operator setting there and are off by
 default: a press against a server with controls disabled fails
 visibly with Print Handy's refusal, never silently.
+
+The 0.5.0 remainder (issue #1) adds Emergency stop, Firmware restart
+and Server restart buttons on the same terms: one set per printer,
+created for every printer, posting the confirm body through the same
+client action path. A family with no such capability refuses on the
+Print Handy side, and that refusal fails the press visibly here.
 """
 
 from __future__ import annotations
@@ -53,6 +59,21 @@ PRINTER_BUTTONS: tuple[PrintHandyButtonEntityDescription, ...] = (
         key="cancel",
         name="Cancel",
         icon="mdi:cancel",
+    ),
+    PrintHandyButtonEntityDescription(
+        key="emergency_stop",
+        name="Emergency stop",
+        icon="mdi:octagon",
+    ),
+    PrintHandyButtonEntityDescription(
+        key="firmware_restart",
+        name="Firmware restart",
+        icon="mdi:restart",
+    ),
+    PrintHandyButtonEntityDescription(
+        key="server_restart",
+        name="Server restart",
+        icon="mdi:server",
     ),
 )
 

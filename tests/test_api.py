@@ -202,6 +202,119 @@ def test_control_actions_post_to_the_right_printer_urls():
         assert body == ({"confirm": True} if action == "cancel" else None)
 
 
+def test_new_button_actions_post_with_the_confirm_body():
+    """Emergency stop / restarts (issue #1) POST with {"confirm": true}."""
+    for action in ("emergency_stop", "firmware_restart", "server_restart"):
+        session = _ControlSession({_control_url("ad5x", action): _FakeResponse(200, {})})
+        asyncio.run(_client(session, token="sekrit").async_printer_control("ad5x", action))
+        url, headers, body = session.posts[0]
+        assert url == _control_url("ad5x", action)
+        assert headers == {"X-WebUI-Token": "sekrit"}
+        assert body == {"confirm": True}
+
+
+def test_new_button_action_409_refusal_carries_the_reason():
+    """A wrong-state 409 on a restart button is a refusal with its reason."""
+    body = {"ok": False, "reason": "printer is not in an emergency stop"}
+    session = _ControlSession(
+        {_control_url("ad5x", "firmware_restart"): _FakeResponse(409, body)}
+    )
+    with pytest.raises(api.PrintHandyControlRefusedError) as excinfo:
+        asyncio.run(_client(session).async_printer_control("ad5x", "firmware_restart"))
+    assert "printer is not in an emergency stop" in str(excinfo.value)
+
+
+def test_send_gcode_posts_the_script_to_the_printer():
+    """send_gcode POSTs {"script": ...} to that printer's gcode path."""
+    session = _ControlSession({_control_url("ad5x", "gcode"): _FakeResponse(200, {})})
+    asyncio.run(_client(session, token="sekrit").async_send_gcode("ad5x", "M104 S200"))
+    url, headers, body = session.posts[0]
+    assert url == _control_url("ad5x", "gcode")
+    assert headers == {"X-WebUI-Token": "sekrit"}
+    assert body == {"script": "M104 S200"}
+
+
+def test_send_gcode_quotes_the_printer_id():
+    """The gcode URL quotes the printer id exactly like the other paths."""
+    session = _ControlSession(
+        {_control_url("my%20printer", "gcode"): _FakeResponse(200, {})}
+    )
+    asyncio.run(_client(session).async_send_gcode("my printer", "G28"))
+    assert session.posts[0][0] == _control_url("my%20printer", "gcode")
+
+
+def test_send_gcode_empty_script_is_rejected_without_a_post():
+    """An empty script is refused client-side; nothing is POSTed."""
+    session = _ControlSession({})
+    with pytest.raises(ValueError, match="script is required"):
+        asyncio.run(_client(session).async_send_gcode("ad5x", "  "))
+    assert session.posts == []
+
+
+def test_send_gcode_refusal_carries_the_server_reason():
+    """A refused G-code send raises the control refusal with its reason."""
+    body = {"ok": False, "reason": "controls are disabled"}
+    session = _ControlSession({_control_url("ad5x", "gcode"): _FakeResponse(403, body)})
+    with pytest.raises(api.PrintHandyControlRefusedError) as excinfo:
+        asyncio.run(_client(session).async_send_gcode("ad5x", "M112"))
+    assert "controls are disabled" in str(excinfo.value)
+
+
+def test_send_gcode_401_is_auth_error():
+    """A rejected token on a G-code POST is the auth error, not a refusal."""
+    session = _ControlSession({_control_url("ad5x", "gcode"): _FakeResponse(401, {})})
+    with pytest.raises(api.PrintHandyAuthError):
+        asyncio.run(_client(session, token="wrong").async_send_gcode("ad5x", "G28"))
+
+
+def test_exclude_object_posts_the_name_with_confirm():
+    """Exclude POSTs {"object": ..., "confirm": true} to the exclude path."""
+    session = _ControlSession({_control_url("ad5x", "exclude"): _FakeResponse(200, {})})
+    asyncio.run(
+        _client(session, token="sekrit").async_exclude_object("ad5x", "cube_1")
+    )
+    url, headers, body = session.posts[0]
+    assert url == _control_url("ad5x", "exclude")
+    assert headers == {"X-WebUI-Token": "sekrit"}
+    assert body == {"object": "cube_1", "confirm": True}
+
+
+def test_exclude_object_empty_name_is_rejected_without_a_post():
+    """An empty object name is refused client-side; nothing is POSTed."""
+    session = _ControlSession({})
+    with pytest.raises(ValueError, match="object name is required"):
+        asyncio.run(_client(session).async_exclude_object("ad5x", ""))
+    assert session.posts == []
+
+
+def test_exclude_last_object_409_reason_reaches_the_caller_verbatim():
+    """The last-object 409 reason (use cancel) survives in the error text."""
+    reason = (
+        "this is the last remaining object; cancel the print instead"
+    )
+    body = {"ok": False, "reason": reason}
+    session = _ControlSession({_control_url("ad5x", "exclude"): _FakeResponse(409, body)})
+    with pytest.raises(api.PrintHandyControlRefusedError) as excinfo:
+        asyncio.run(_client(session).async_exclude_object("ad5x", "cube_1"))
+    assert reason in str(excinfo.value)
+
+
+def test_exclude_unknown_object_404_is_refused_with_reason():
+    """An unknown object (404) is a refusal carrying the server's reason."""
+    body = {"ok": False, "reason": "no object named 'nope' in this print"}
+    session = _ControlSession({_control_url("ad5x", "exclude"): _FakeResponse(404, body)})
+    with pytest.raises(api.PrintHandyControlRefusedError) as excinfo:
+        asyncio.run(_client(session).async_exclude_object("ad5x", "nope"))
+    assert "no object named 'nope'" in str(excinfo.value)
+
+
+def test_exclude_transport_failure_is_connection_error():
+    """An unreachable Web UI on an exclude POST is a connection error."""
+    session = _ControlSession({_control_url("ad5x", "exclude"): OSError("no route")})
+    with pytest.raises(api.PrintHandyConnectionError):
+        asyncio.run(_client(session).async_exclude_object("ad5x", "cube_1"))
+
+
 def test_control_quotes_the_printer_id():
     """Control URLs quote the printer id exactly like the status URL."""
     session = _ControlSession(
