@@ -270,6 +270,43 @@ async def test_current_object_sensor_absent_without_object_data(
     assert states == []
 
 
+async def test_current_object_sensor_appears_when_a_print_starts(
+    hass: HomeAssistant,
+):
+    """Object data arriving on a later poll creates the sensor then.
+
+    Object data only exists while a print runs, so setup-time gating
+    alone would miss every print started after Home Assistant boots:
+    starting idle must gain the sensor when the print's first poll
+    reports objects, without an integration reload.
+    """
+    FakeApiClient.status_body = STATUS_WITHOUT_OBJECTS
+    entry = await _setup(hass)
+    assert [
+        state
+        for state in hass.states.async_all("sensor")
+        if state.entity_id.endswith("_current_object")
+    ] == []
+    FakeApiClient.status_body = STATUS_WITH_OBJECTS
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    states = [
+        state
+        for state in hass.states.async_all("sensor")
+        if state.entity_id.endswith("_current_object")
+    ]
+    assert len(states) == 1
+    assert states[0].state == "cube_1"
+    # A further refresh must not duplicate the sensor.
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    assert len([
+        state
+        for state in hass.states.async_all("sensor")
+        if state.entity_id.endswith("_current_object")
+    ]) == 1
+
+
 async def test_send_gcode_service_reaches_the_client(hass: HomeAssistant):
     """print_handy.send_gcode posts the script for the named printer only."""
     await _setup(hass)

@@ -197,10 +197,12 @@ PRINTER_SENSORS: tuple[PrintHandyPrinterSensorEntityDescription, ...] = (
         value_fn=lambda status: status.total_layers,
         present_fn=lambda status: status.total_layers is not None,
     ),
-    # Issue-#1 remainder (0.5.0): created only when the first poll
-    # actually carries object data, mirroring the target gating — a
-    # printer whose Print Handy reports no objects (or a build that
-    # predates the object fields) gains no dead sensor.
+    # Issue-#1 remainder (0.5.0): gated on object data like the
+    # targets, but checked on every poll, not just the first (see
+    # async_setup_entry) — object data only exists while a print
+    # runs, so a printer whose Print Handy reports no objects (or a
+    # build that predates the object fields) gains no dead sensor,
+    # and one that starts a print later gains the sensor then.
     PrintHandyPrinterSensorEntityDescription(
         key="current_object",
         name="Current object",
@@ -208,6 +210,10 @@ PRINTER_SENSORS: tuple[PrintHandyPrinterSensorEntityDescription, ...] = (
         value_fn=lambda status: status.current_object,
         present_fn=lambda status: bool(status.objects or status.current_object),
     ),
+)
+
+CURRENT_OBJECT_DESCRIPTION = next(
+    description for description in PRINTER_SENSORS if description.key == "current_object"
 )
 
 
@@ -253,6 +259,41 @@ async def async_setup_entry(
                     for row in view.slots
                 )
     async_add_entities(entities)
+
+    # The current-object sensor is the one gated entity whose data
+    # is not a standing printer property: objects exist only while a
+    # print runs, so a printer idle at setup would never gain the
+    # sensor under first-poll gating alone (Codex review, PR #8).
+    # Watch every poll instead and add it the first time a printer's
+    # status actually carries object data; printers that never
+    # report objects still gain no dead sensor.
+    added_current_object: set[str] = set()
+    if coordinator.data is not None:
+        for printer in coordinator.data.printers:
+            status = coordinator.data.status(printer.printer_id)
+            if status is not None and CURRENT_OBJECT_DESCRIPTION.present_fn(status):
+                added_current_object.add(printer.printer_id)
+
+    def _add_current_object_when_ready() -> None:
+        if coordinator.data is None:
+            return
+        new_entities: list[SensorEntity] = []
+        for printer in coordinator.data.printers:
+            if printer.printer_id in added_current_object:
+                continue
+            status = coordinator.data.status(printer.printer_id)
+            if status is None or not CURRENT_OBJECT_DESCRIPTION.present_fn(status):
+                continue
+            added_current_object.add(printer.printer_id)
+            new_entities.append(
+                PrintHandyPrinterStatusSensor(
+                    coordinator, entry, printer, CURRENT_OBJECT_DESCRIPTION
+                )
+            )
+        if new_entities:
+            async_add_entities(new_entities)
+
+    entry.async_on_unload(coordinator.async_add_listener(_add_current_object_when_ready))
 
 
 class PrintHandyPrinterStatusSensor(PrintHandyPrinterEntity, SensorEntity):

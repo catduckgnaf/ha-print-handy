@@ -320,7 +320,7 @@ side, like every control surface here.
 | Server restart | button | `POST /api/printers/<id>/server_restart` with `{"confirm": true}`; same terms |
 | `print_handy.send_gcode` | service | `POST /api/printers/<id>/gcode` with `{script}`; fields `printer_id`, `script` (non-empty) |
 | `print_handy.exclude_object` | service | `POST /api/printers/<id>/exclude` with `{object, confirm: true}`; fields `printer_id`, `object` (non-empty) |
-| Current object | sensor | status `current_object`; attributes: `objects`, `excluded_objects`. Created only when the first poll carries object data |
+| Current object | sensor | status `current_object`; attributes: `objects`, `excluded_objects`. Created the first time any poll carries object data (see the gating note below) |
 
 Design choices, recorded:
 
@@ -348,8 +348,15 @@ Design choices, recorded:
   and `excluded_objects` (name lists, empty where a printer reports
   no objects); the parser also tolerates the keys missing entirely
   (an older Print Handy), yielding None / empty. Sensor creation
-  gating mirrors the target numbers: no object data in the first
-  poll, no sensor.
+  gating starts from the target numbers' rule (no object data, no
+  sensor) but is checked on every poll, not just the first: object
+  data only exists while a print runs, so first-poll-only gating
+  would give the sensor only to printers mid-print at Home
+  Assistant startup (Codex review on PR #8). A coordinator listener
+  adds the sensor the first time a poll carries object data for a
+  printer; printers that never report objects still gain none. (The
+  other gated entities read standing printer properties — targets,
+  layers, remaining time — and keep first-poll gating.)
 
 ## 4. The gap, precisely — closed, except the thumbnail
 
