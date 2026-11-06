@@ -12,11 +12,14 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
+    CONTROL_SERVICES,
     DOMAIN,
     ISSUE_URL,
     PLATFORMS,
     SERVICE_ADD_SPOOL,
     SERVICE_ASSIGN_SPOOL,
+    SERVICE_EXCLUDE_OBJECT,
+    SERVICE_SEND_GCODE,
     SERVICE_SWAP_SPOOLS,
     SERVICE_SYNC_SPOOLS,
     SERVICE_UNASSIGN_SPOOL,
@@ -70,12 +73,28 @@ SERVICE_ADD_SCHEMA = vol.Schema(
 )
 SERVICE_SYNC_SCHEMA = vol.Schema({vol.Required("printer_id"): cv.string})
 
+_NON_EMPTY = vol.All(cv.string, vol.Length(min=1))
+SERVICE_SEND_GCODE_SCHEMA = vol.Schema(
+    {
+        vol.Required("printer_id"): cv.string,
+        vol.Required("script"): _NON_EMPTY,
+    }
+)
+SERVICE_EXCLUDE_OBJECT_SCHEMA = vol.Schema(
+    {
+        vol.Required("printer_id"): cv.string,
+        vol.Required("object"): _NON_EMPTY,
+    }
+)
+
 _SERVICE_SCHEMAS = {
     SERVICE_ASSIGN_SPOOL: SERVICE_ASSIGN_SCHEMA,
     SERVICE_SWAP_SPOOLS: SERVICE_SWAP_SCHEMA,
     SERVICE_UNASSIGN_SPOOL: SERVICE_UNASSIGN_SCHEMA,
     SERVICE_ADD_SPOOL: SERVICE_ADD_SCHEMA,
     SERVICE_SYNC_SPOOLS: SERVICE_SYNC_SCHEMA,
+    SERVICE_SEND_GCODE: SERVICE_SEND_GCODE_SCHEMA,
+    SERVICE_EXCLUDE_OBJECT: SERVICE_EXCLUDE_OBJECT_SCHEMA,
 }
 
 
@@ -108,7 +127,7 @@ def _coordinator_for_printer(
         # one instance's spools.
         raise HomeAssistantError(
             f"Printer id '{printer_id}' exists on more than one configured "
-            "Print Handy instance; the spool services cannot tell which one "
+            "Print Handy instance; the services cannot tell which one "
             "is meant, so nothing was changed. Rename the printer on one "
             "instance, or use that instance's Web UI."
         )
@@ -174,6 +193,41 @@ def _async_register_spool_services(hass: HomeAssistant) -> None:
         )
 
 
+def _async_register_control_services(hass: HomeAssistant) -> None:
+    """Register the issue-#1 send-G-code / exclude-object services.
+
+    Once per Home Assistant instance, like the spool services. Each
+    call acts only on the named printer (resolved through the same
+    coordinator lookup, so an unknown or ambiguous id is a named
+    error, never a default-printer fallback) and any Print Handy
+    refusal propagates as a HomeAssistantError carrying the server's
+    reason — including the exclude endpoint's last-object reason.
+    """
+    if hass.services.has_service(DOMAIN, SERVICE_SEND_GCODE):
+        return
+
+    async def _send_gcode(call: ServiceCall) -> None:
+        coordinator = _coordinator_for_printer(hass, call.data["printer_id"])
+        await coordinator.async_send_gcode(
+            call.data["printer_id"], call.data["script"]
+        )
+
+    async def _exclude_object(call: ServiceCall) -> None:
+        coordinator = _coordinator_for_printer(hass, call.data["printer_id"])
+        await coordinator.async_exclude_object(
+            call.data["printer_id"], call.data["object"]
+        )
+
+    handlers: dict[str, Any] = {
+        SERVICE_SEND_GCODE: _send_gcode,
+        SERVICE_EXCLUDE_OBJECT: _exclude_object,
+    }
+    for service, handler in handlers.items():
+        hass.services.async_register(
+            DOMAIN, service, handler, schema=_SERVICE_SCHEMAS[service]
+        )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: PrintHandyConfigEntry) -> bool:
     """Set up Print Handy from a config entry."""
     LOGGER.info(
@@ -192,6 +246,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: PrintHandyConfigEntry) -
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     _async_register_spool_services(hass)
+    _async_register_control_services(hass)
 
     return True
 
@@ -211,6 +266,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: PrintHandyConfigEntry) 
         if other.entry_id != entry.entry_id
     ]
     if unloaded and not remaining:
-        for service in SPOOL_SERVICES:
+        for service in (*SPOOL_SERVICES, *CONTROL_SERVICES):
             hass.services.async_remove(DOMAIN, service)
     return unloaded

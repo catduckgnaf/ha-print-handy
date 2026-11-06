@@ -102,6 +102,14 @@ class PrinterStatus:
     total_layers: int | None = None
     detail: str = ""
     ams: dict[str, Any] | None = None
+    # Object data (issue #1 remainder): the companion Print Handy build
+    # always sends these keys — ``current_object`` is a name or null,
+    # ``objects`` / ``excluded_objects`` are name lists, empty for
+    # printers that do not report objects. Older builds omit the keys
+    # entirely; parsing degrades to None / empty, never an exception.
+    current_object: str | None = None
+    objects: tuple[str, ...] = ()
+    excluded_objects: tuple[str, ...] = ()
 
     @property
     def unavailable(self) -> bool:
@@ -120,6 +128,13 @@ def _count(value: Any) -> int | None:
     """Return a layer-style count: whole numbers only, as int."""
     number = _number(value)
     return int(number) if number is not None else None
+
+
+def _names(value: Any) -> tuple[str, ...]:
+    """Return a list of names as a tuple; anything else degrades to empty."""
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value if isinstance(item, str) and item)
 
 
 def parse_printer_status(raw: Any, printer_id: str = "") -> PrinterStatus:
@@ -152,6 +167,14 @@ def parse_printer_status(raw: Any, printer_id: str = "") -> PrinterStatus:
         total_layers=total_layers,
         detail=str(status.get("detail") or ""),
         ams=ams if isinstance(ams, dict) else None,
+        current_object=(
+            str(status["current_object"])
+            if isinstance(status.get("current_object"), str)
+            and status.get("current_object")
+            else None
+        ),
+        objects=_names(status.get("objects")),
+        excluded_objects=_names(status.get("excluded_objects")),
     )
 
 

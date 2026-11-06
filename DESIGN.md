@@ -238,9 +238,10 @@ Design choices, recorded:
   and an offline printer's explicit failure. A successful action
   requests a coordinator refresh.
 
-Still phase-3 *discussion only*, not built: emergency stop and
-firmware / server restart buttons, a send-G-code service, and
-exclude-object (issue #1 keeps those open).
+The three items that were phase-3 *discussion only* at 0.3.0 —
+emergency stop and firmware / server restart buttons, a send-G-code
+service, and exclude-object — shipped in 0.5.0 (§3.5), at catduck's
+direction on issue #1, against the companion Print Handy endpoints.
 
 ### 3.4 Shipped in 0.4.0 (spools, per printer, against the #789 contract)
 
@@ -299,6 +300,57 @@ Design choices, recorded:
   services cover the slot-assignment flows
   (assign / swap / unassign / add / sync) only.
 
+### 3.5 Shipped in 0.5.0 (issue #1 remainder, per printer)
+
+New fixed suffixes, documented in the README: buttons
+`emergency_stop`, `firmware_restart`, `server_restart`; sensor
+`current_object` under the `sensor.` domain. Every earlier entity id
+is unchanged; this surface is additive. This closes issue #1: its
+committed scope shipped in 0.3.0 (§3.3) and these three were its
+remaining discussion items, built at catduck's direction against a
+companion Print Handy PR that adds the endpoints below — this
+integration only functions for these items with that Print Handy
+build merged, and it needs `controls_enabled` on the Print Handy
+side, like every control surface here.
+
+| Entity / service | Type | Source / action |
+|---|---|---|
+| Emergency stop | button | `POST /api/printers/<id>/emergency_stop` with `{"confirm": true}` — created for every roster printer, acting only on that printer |
+| Firmware restart | button | `POST /api/printers/<id>/firmware_restart` with `{"confirm": true}`; same terms |
+| Server restart | button | `POST /api/printers/<id>/server_restart` with `{"confirm": true}`; same terms |
+| `print_handy.send_gcode` | service | `POST /api/printers/<id>/gcode` with `{script}`; fields `printer_id`, `script` (non-empty) |
+| `print_handy.exclude_object` | service | `POST /api/printers/<id>/exclude` with `{object, confirm: true}`; fields `printer_id`, `object` (non-empty) |
+| Current object | sensor | status `current_object`; attributes: `objects`, `excluded_objects`. Created only when the first poll carries object data |
+
+Design choices, recorded:
+
+- **The new buttons follow the existing three exactly.** Same client
+  action path, same fixed-suffix vocabulary, created for every
+  printer — the press is the confirmation, so the client sends the
+  `{"confirm": true}` body for them, as it already did for cancel
+  (`CONFIRM_ACTIONS` in const.py). A family with no such capability
+  refuses on the Print Handy side (501), and the refusal fails the
+  press visibly; no button is gated off preemptively here.
+- **Refusals are the control error, not the spool error.** G-code
+  and exclude are control-API actions behind the controls gate, so
+  their refusals raise `PrintHandyControlRefusedError`, whose
+  mapping now covers the control API's named refusal statuses
+  (400 / 403 / 404 / 409 / 501) with the server's reason carried in
+  the message, and the coordinator turns it into a
+  `HomeAssistantError` on the service call — so the exclude
+  endpoint's last-remaining-object 409 reason (use cancel instead)
+  reaches the caller verbatim. Services are registered once on entry
+  setup and removed when the last entry unloads, alongside the spool
+  services, and resolve their printer through the same lookup: an
+  unknown or ambiguous id is a named error, never a fallback.
+- **Object data degrades to empty, never to a guess.** The companion
+  status always carries `current_object` (name or null), `objects`
+  and `excluded_objects` (name lists, empty where a printer reports
+  no objects); the parser also tolerates the keys missing entirely
+  (an older Print Handy), yielding None / empty. Sensor creation
+  gating mirrors the target numbers: no object data in the first
+  poll, no sensor.
+
 ## 4. The gap, precisely — closed, except the thumbnail
 
 Nothing in this repo could manufacture the phase-2 entities: the data
@@ -355,10 +407,10 @@ Print Handy connection.
 | Current / total layer | print_stats.info, then virtual_sdcard, then computed from file metadata (object/first-layer height) | Shipped 0.2.0 where provided (Bambu, Elegoo SDCP); Klipper-family normalized status still surfaces neither, so those printers get no layer sensors |
 | Filament used / spool | filament_used sensor + history totals; Spoolman support is **only a Spool ID sensor** — no name, material or remaining weight | Shipped 0.2.0 as the AMS Filament sensor from the printer-reported `ams` block (name + color/material/remaining_pct attributes, full tray list) — matches this bar's shape with richer data. Shipped 0.4.0: the Spoolman-depth sensors this row awaited — one slot spool sensor per slot from the #789 spools endpoint (spool id, name, material, color, remaining weight as attributes; §3.4), plus the spool services. No filament-used sensor: no endpoint carries a filament-used figure |
 | Job queue count / list | Queue State + Jobs-in-queue sensors, Start-queue button; no per-job control | Print Handy has no cross-vendor queue concept today → out of scope until it does |
-| Exclude object | **not supported** (never queried) | Not in the bar; Print Handy tracks objects from slicing, so this is a possible phase 3 differentiator, not parity |
+| Exclude object | **not supported** (never queried) | Shipped 0.5.0 as the differentiator it was flagged as: `print_handy.exclude_object` service + Current object sensor (§3.5), against the companion Print Handy endpoint |
 | Pause / Resume / Cancel buttons | buttons → /printer/print/* | Shipped 0.3.0: per-printer buttons posting to Print Handy's control API (§3.3); usable once the Print Handy side (#708) lands with controls enabled there |
-| Emergency stop, firmware/server restart buttons | buttons | Phase 3 discussion; Print Handy's confirm-first posture may keep E-stop chat-side |
-| Send G-code | `moonraker.send_gcode` service | Phase 3 at earliest; same gate |
+| Emergency stop, firmware/server restart buttons | buttons | Shipped 0.5.0 (§3.5): per-printer buttons with the confirm body, against the companion Print Handy endpoints — catduck directed building them on issue #1, superseding the earlier keep-E-stop-chat-side discussion posture |
+| Send G-code | `moonraker.send_gcode` service | Shipped 0.5.0 (§3.5): `print_handy.send_gcode`, same controls gate |
 | Camera | camera entity from Moonraker webcam config (snapshot/stream URLs) | Not shipped in 0.2.0 — roster camera data is not parsed by the integration's model yet; revisit with the thumbnail work |
 | Config flow | host, port (7125), optional API key (32 chars), TLS, printer name; options: polling rate, camera/thumbnail ports, and a "quiet unreachable" mode for printers on smart plugs; no discovery, no reconfigure flow, no unique id | URL + token (§2), unique id set, reauth flow included; options: scan interval (dual-rate in phase 2) |
 | Multiple printers | one config entry per printer (per Moonraker) | **Better:** one entry surfaces the whole roster as separate devices |

@@ -145,3 +145,39 @@ sync_spools:
       example: flashforge-ad5x
       selector:
         text:
+send_gcode:
+  name: Send G-code
+  description: Send a G-code script to one printer, through Print Handy's control API. Print Handy decides whether to honor it; a refusal fails the call with its reason.
+  fields:
+    printer_id:
+      name: Printer
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it.
+      required: true
+      example: flashforge-ad5x
+      selector:
+        text:
+    script:
+      name: Script
+      description: The G-code script text to send to the printer (for example "M104 S200").
+      required: true
+      example: M104 S200
+      selector:
+        text:
+exclude_object:
+  name: Exclude object
+  description: Exclude one object from the print running on one printer, by the object name shown on the Current object sensor. Excluding the last remaining object is refused — Print Handy's reason says to cancel the print instead.
+  fields:
+    printer_id:
+      name: Printer
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it.
+      required: true
+      example: flashforge-ad5x
+      selector:
+        text:
+    object:
+      name: Object
+      description: Name of the object to exclude, exactly as the Current object sensor lists it.
+      required: true
+      example: cube_1
+      selector:
+        text:

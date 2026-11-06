@@ -197,6 +197,17 @@ PRINTER_SENSORS: tuple[PrintHandyPrinterSensorEntityDescription, ...] = (
         value_fn=lambda status: status.total_layers,
         present_fn=lambda status: status.total_layers is not None,
     ),
+    # Issue-#1 remainder (0.5.0): created only when the first poll
+    # actually carries object data, mirroring the target gating — a
+    # printer whose Print Handy reports no objects (or a build that
+    # predates the object fields) gains no dead sensor.
+    PrintHandyPrinterSensorEntityDescription(
+        key="current_object",
+        name="Current object",
+        icon="mdi:cube-outline",
+        value_fn=lambda status: status.current_object,
+        present_fn=lambda status: bool(status.objects or status.current_object),
+    ),
 )
 
 
@@ -273,11 +284,22 @@ class PrintHandyPrinterStatusSensor(PrintHandyPrinterEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """The current-state sensor also carries filename and any detail."""
-        if self.entity_description.key != "current_state":
-            return {}
+        """Grouped attributes for the sensors that carry them.
+
+        The current-state sensor carries filename and any detail; the
+        current-object sensor carries the full object list and the
+        excluded list, so cards and the exclude_object service's
+        callers can see every object's name, not just the current one.
+        """
         status = self.status
         if status is None:
+            return {}
+        if self.entity_description.key == "current_object":
+            return {
+                "objects": list(status.objects),
+                "excluded_objects": list(status.excluded_objects),
+            }
+        if self.entity_description.key != "current_state":
             return {}
         attrs: dict[str, Any] = {"filename": status.filename}
         if status.detail:

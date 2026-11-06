@@ -232,6 +232,50 @@ def test_bad_printer_status_bodies_raise():
         parse_printer_status({"ok": True, "id": "p"})
 
 
+def test_printer_status_parses_object_fields():
+    """Current object, object list and excluded list all parse (issue #1)."""
+    body = {
+        "id": "ad5x",
+        "status": {
+            "state": "printing",
+            "current_object": "cube_1",
+            "objects": ["cube_1", "cube_2"],
+            "excluded_objects": ["cube_2"],
+        },
+    }
+    status = parse_printer_status(body)
+    assert status.current_object == "cube_1"
+    assert status.objects == ("cube_1", "cube_2")
+    assert status.excluded_objects == ("cube_2",)
+
+
+def test_printer_status_without_object_keys_degrades():
+    """A status body with no object keys (older Print Handy) stays empty."""
+    status = parse_printer_status(BAMBU_STATUS_BODY)
+    assert status.current_object is None
+    assert status.objects == ()
+    assert status.excluded_objects == ()
+
+
+def test_printer_status_object_fields_tolerate_bad_shapes():
+    """Null / wrong-typed object fields degrade, never raise."""
+    body = {
+        "id": "p",
+        "status": {
+            "state": "printing",
+            "current_object": None,
+            "objects": "not-a-list",
+            "excluded_objects": [42, None, "cube_9", ""],
+        },
+    }
+    status = parse_printer_status(body)
+    assert status.current_object is None
+    assert status.objects == ()
+    assert status.excluded_objects == ("cube_9",)
+    body["status"]["current_object"] = 7
+    assert parse_printer_status(body).current_object is None
+
+
 def test_ams_helpers_find_active_tray():
     """The active, present tray is the filament; trays carry their unit."""
     status = parse_printer_status(BAMBU_STATUS_BODY)

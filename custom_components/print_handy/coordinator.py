@@ -76,7 +76,11 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
         return dataclasses.replace(snapshot, statuses=statuses, spools=spools)
 
     async def async_control_printer(self, printer_id: str, action: str) -> None:
-        """Send a pause / resume / cancel action to one printer.
+        """Send a button control action to one printer.
+
+        Pause / resume / cancel, plus the 0.5.0 emergency stop and
+        firmware / server restart buttons — the client owns the
+        per-action path and confirm body.
 
         Any failure — controls refused on the Print Handy side, an
         unreachable Web UI, a rejected token — is raised as a
@@ -86,6 +90,36 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
         """
         try:
             await self.client.async_printer_control(printer_id, action)
+        except PrintHandyApiError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self.async_request_refresh()
+
+    async def async_send_gcode(self, printer_id: str, script: str) -> None:
+        """Send a G-code script to one printer, failing visibly.
+
+        Same failure contract as async_control_printer: a refusal from
+        Print Handy (controls disabled, unsupported family, a rejected
+        script), an unreachable Web UI or a rejected token becomes a
+        HomeAssistantError on the service call carrying the server's
+        reason; success triggers a refresh.
+        """
+        try:
+            await self.client.async_send_gcode(printer_id, script)
+        except PrintHandyApiError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self.async_request_refresh()
+
+    async def async_exclude_object(self, printer_id: str, object_name: str) -> None:
+        """Exclude one object on one printer, failing visibly.
+
+        Same failure contract as async_control_printer — in
+        particular the server's named 409 reasons (unknown object,
+        and the last remaining object, where the reason says to use
+        cancel instead) reach the service caller verbatim in the
+        HomeAssistantError; success triggers a refresh.
+        """
+        try:
+            await self.client.async_exclude_object(printer_id, object_name)
         except PrintHandyApiError as err:
             raise HomeAssistantError(str(err)) from err
         await self.async_request_refresh()
