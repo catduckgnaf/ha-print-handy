@@ -35,7 +35,7 @@ Five services manage spools through the same Print Handy spool API the Web UI Sp
 - `print_handy.add_spool` — fields: `printer_id`, `material`, `color`, `grams`, optional `brand` and `hex`. Creates one spool on the shelf; load it with `assign_spool` afterwards.
 - `print_handy.sync_spools` — fields: `printer_id`. Reconciles that printer's slot state with Spoolman.
 
-The spool writes sit behind the same Print Handy controls gate as the phase-3 controls (off by default there). A refusal — controls disabled, unknown spool or slot, a conflict — fails the service call visibly in Home Assistant with Print Handy's reason; nothing fails silently. The API's spool-record `edit` action is not exposed as a service in 0.4.0; edit spool records in Print Handy's Web UI Spools page or in Spoolman.
+The spool writes sit behind the same Print Handy controls gate as the phase-3 controls (off by default there). A refusal — controls disabled, unknown spool or slot, a conflict — fails the service call visibly in Home Assistant with Print Handy's reason; nothing fails silently. The API's spool-record `edit` action is not exposed as a service in 0.4.0; edit spool records in Print Handy's Web UI Spools page. Spoolman's own UI is a second option only for installs that run an external Spoolman — the Spoolman bundled with Print Handy has no web UI (see [Dashboards: opening spools](#dashboards-opening-spools)).
 
 Not yet available: print thumbnails (Print Handy has no per-printer thumbnail source yet — tracked on the Print Handy side).
 
@@ -44,6 +44,17 @@ Requires a Print Handy build with the per-printer status endpoint (Print Handy P
 The phase-3 controls additionally require a Print Handy build with the control API (Print Handy issue #708) **and** controls enabled on the Print Handy side — they are off by default there, behind the operator's own setting. Against a Print Handy without the control API, or with controls disabled, the buttons and numbers are still created but every press or set fails visibly in Home Assistant with Print Handy's refusal; nothing fails silently.
 
 The spool sensors and services additionally require a Print Handy build with the spool API (Print Handy issue #789). Against an older Print Handy the slot spool sensors are not created and the rest of the integration works unchanged; the spool services fail visibly with Print Handy's refusal. The spool writes share the controls gate above, so they also need controls enabled on the Print Handy side.
+
+## Dashboards: opening spools
+
+To open spools from a Home Assistant dashboard, you have two supported routes:
+
+- **Native cards** built from the slot spool sensors (`_slot_1_spool` … `_slot_4_spool`) — the spool name, material, color and remaining weight are already attributes on those sensors.
+- **A webpage card or panel** pointing at the Print Handy Web UI Spools page: `<Web UI base URL>/spools`. Use the Web UI URL you configured for this integration (see [Configuration](#configuration) — for example, `http://print-handy.local:8080/spools` if that is your Web UI URL); it is also the URL shown as the Print Handy device's configuration URL in Home Assistant, with `/spools` added. Editing spool records and the full spool flows live on that page.
+
+Do **not** point a card at Spoolman itself. The Spoolman bundled with Print Handy is API-only and has no web UI (Print Handy #214): a browser opening its root — or the `spoolman_url` from Print Handy's status payload, which for the bundled instance is the container-internal `http://127.0.0.1:8000` — gets only the one line "Spoolman is managed by Print Handy, use /api/v1." That address is the API endpoint Print Handy talks to, not a dashboard target. If an existing dashboard card points there, repoint it at the Web UI Spools page URL above — a one-line URL change.
+
+An install that runs its own external Spoolman (`PRINT_HANDY_BUNDLED_SPOOLMAN=false` on the Print Handy side) is different: that Spoolman does have its own web UI, and dashboard cards may point at it as usual.
 
 ## Installation
 

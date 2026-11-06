@@ -290,8 +290,13 @@ Design choices, recorded:
 - **The API's `edit` action is not a service in 0.4.0.** Editing a
   spool's Spoolman record (name, material, color, brand,
   remaining weight, archive) stays in Print Handy's Web UI Spools
-  page and in Spoolman, whose filament-record sharing the edit
-  response names; the HA services cover the slot-assignment flows
+  page — and, only for installs running an external Spoolman, in
+  Spoolman's own UI; the Spoolman bundled with Print Handy is
+  API-only and has no web UI (Print Handy #214; the dashboard
+  target this implies is documented in the README under
+  "Dashboards: opening spools", #6 here). Spoolman's
+  filament-record sharing is what the edit response names; the HA
+  services cover the slot-assignment flows
   (assign / swap / unassign / add / sync) only.
 
 ## 4. The gap, precisely — closed, except the thumbnail
