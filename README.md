@@ -2,7 +2,7 @@
 
 A Home Assistant custom integration for [Print Handy](https://github.com/catduckgnaf/print-handy) — every printer Print Handy manages, in one integration, instead of a separate Moonraker, OctoPrint or vendor integration per printer.
 
-## What it does today (0.5.0)
+## What it does today (0.5.1)
 
 The integration polls the Print Handy Web UI's status API (`GET /api/status` for the instance and roster, `GET /api/printers/<id>/status` for each printer's live status, `GET /api/printers/<id>/spools` for each printer's spool assignments) and creates:
 

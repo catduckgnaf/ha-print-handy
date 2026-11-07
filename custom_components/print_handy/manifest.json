@@ -1,6 +1,9 @@
 {
   "domain": "print_handy",
   "name": "Print Handy",
+  "categories": [
+    "computers_network.printers"
+  ],
   "codeowners": [
     "@catduckgnaf"
   ],
@@ -11,5 +14,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/catduckgnaf/ha-print-handy/issues",
   "requirements": [],
-  "version": "0.5.0"
+  "version": "0.5.1"
 }
