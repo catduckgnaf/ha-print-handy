@@ -92,6 +92,10 @@ Copy `custom_components/print_handy/` into your Home Assistant `config/custom_co
 - The token is stored only in the config entry and sent only as the `X-WebUI-Token` header.
 - Print Handy's optional MQTT events (`print-handy/<event>`) work unchanged alongside this integration for automations that only need print started/finished notifications today.
 
+## Support and community
+
+Questions and chat live in the **Print Handy Discord server**: [discord.gg/mT2Ht3nqZu](https://discord.gg/mT2Ht3nqZu) — this integration has its own **#print-handy** channel there (under HA-Integrations). Bugs still belong in this repo's issues, where they can be tracked.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
