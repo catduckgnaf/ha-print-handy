@@ -1,0 +1,20 @@
+Print Handy for Home Assistant
+Copyright (C) 2026 catduck
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, version 3 of the License only
+(AGPL-3.0-only). See the LICENSE file.
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero
+General Public License for more details.
+
+Earlier versions
+----------------
+
+Versions of this integration before this license change were published
+under the Apache License, Version 2.0, and those versions remain
+available under it. Code from them is included here under that license;
+a copy is in LICENSES/Apache-2.0.txt.
