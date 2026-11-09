@@ -488,7 +488,7 @@ coordinator, forward platforms, the #789 spool services), `config_flow.py` (+ re
 (HA-free snapshot parsing, unit-tested without Home Assistant),
 `entity.py`, `sensor.py`, `binary_sensor.py`, `button.py`, `number.py`,
 `services.yaml`, `strings.json` + `translations/en.json`. Repo: `hacs.json`, HACS +
-hassfest + ruff + pytest workflows, `.ruff.toml`, Apache-2.0.
+hassfest + ruff + pytest workflows, `.ruff.toml`, AGPL-3.0-only.
 
 ## 7. Validation status
 
