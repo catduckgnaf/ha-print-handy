@@ -4,16 +4,21 @@ from homeassistant.const import Platform
 
 NAME = "Print Handy"
 DOMAIN = "print_handy"
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 ATTRIBUTION = "Data provided by Print Handy"
 ISSUE_URL = "https://github.com/catduckgnaf/ha-print-handy/issues"
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
+    Platform.CAMERA,
     Platform.NUMBER,
     Platform.SENSOR,
 ]
+
+# Fired on the bus when a printer's live state moves from an active
+# print state to "complete" (issue #14, five features).
+EVENT_PRINT_FINISHED = f"{DOMAIN}_print_finished"
 
 # Configuration constants
 CONF_TOKEN = "token"
@@ -45,6 +50,16 @@ STATUS_PATH = "/api/status"
 PRINTER_STATUS_PATH = "/api/printers/{printer_id}/status"
 HEALTHZ_PATH = "/healthz"
 TOKEN_HEADER = "X-WebUI-Token"
+
+# The camera snapshot proxy (Print Handy #708): one JPEG per request
+# for one printer, behind the same token as every other read.
+PRINTER_CAMERA_PATH = "/api/printers/{printer_id}/camera/snapshot"
+
+# A slot's spool reads as low on filament at or below either bound:
+# the recorded remaining percent when the spool's starting weight is
+# known, else the remaining grams on their own (issue #14).
+LOW_FILAMENT_PERCENT = 10.0
+LOW_FILAMENT_GRAMS = 50.0
 
 # Print Handy's Web UI control API (phase 3; Print Handy #708). Controls
 # are gated by an operator setting on the Print Handy side and are OFF

@@ -1,2 +1,6 @@
 -r requirements.txt
 pytest-homeassistant-custom-component==0.13.373
+# The camera platform (0.7.0) loads Home Assistant's camera component,
+# which imports turbojpeg; a real Home Assistant install installs the
+# camera integration's requirements itself, the test harness does not.
+PyTurboJPEG

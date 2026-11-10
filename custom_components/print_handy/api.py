@@ -48,6 +48,7 @@ Assistant installed.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any
 from urllib.parse import quote
@@ -55,6 +56,7 @@ from urllib.parse import quote
 from .const import (
     CONFIRM_ACTIONS,
     CONTROL_PATHS,
+    PRINTER_CAMERA_PATH,
     PRINTER_EXCLUDE_PATH,
     PRINTER_GCODE_PATH,
     PRINTER_SPOOL_ACTION_PATH,
@@ -323,6 +325,63 @@ class PrintHandyApiClient:
         raise PrintHandyApiError(
             f"Print Handy Web UI returned HTTP {status} for {what}{detail}"
         )
+
+    async def async_get_camera_snapshot(self, printer_id: str) -> bytes:
+        """Fetch one camera JPEG from GET /api/printers/<id>/camera/snapshot.
+
+        The server's proxy answers JPEG bytes on success and the usual
+        ``{ok, reason}`` JSON on failure (an unknown printer, a printer
+        with no camera, an unreachable camera). A failure raises
+        PrintHandyApiError carrying the server's reason when it sent
+        one; auth and transport failures raise as everywhere else.
+        """
+        path = PRINTER_CAMERA_PATH.format(printer_id=quote(printer_id, safe=""))
+        url = f"{self.base_url}{path}"
+        try:
+            async with asyncio.timeout(REQUEST_TIMEOUT):
+                async with self._session.get(
+                    url, headers=self._headers()
+                ) as response:
+                    payload = await response.read()
+                    status = response.status
+        except PrintHandyApiError:
+            raise
+        except TimeoutError as err:
+            raise PrintHandyConnectionError(
+                f"The Print Handy Web UI at {self.base_url} did not answer "
+                f"within {REQUEST_TIMEOUT} seconds"
+            ) from err
+        except Exception as err:  # transport failure of any flavor
+            raise PrintHandyConnectionError(
+                f"Could not reach the Print Handy Web UI at {self.base_url}: "
+                f"{err or type(err).__name__}"
+            ) from err
+        if status == 401:
+            raise PrintHandyAuthError(
+                "Print Handy Web UI rejected the access token"
+            )
+        if status == 429:
+            raise PrintHandyRateLimitedError(
+                "Print Handy is rate-limiting this client after failed access "
+                f"attempts; waiting {DEFAULT_RETRY_AFTER} seconds before "
+                "trying again",
+                DEFAULT_RETRY_AFTER,
+            )
+        if status == 403:
+            raise PrintHandyHostRefusedError(HOST_REFUSED_MESSAGE)
+        if not 200 <= status < 300:
+            reason = ""
+            try:
+                body = json.loads(payload) if payload else None
+            except Exception:  # an undecodable error body names no reason
+                body = None
+            reason = _reason(body)
+            detail = f": {reason}" if reason else ""
+            raise PrintHandyApiError(
+                f"Print Handy Web UI returned HTTP {status} for the camera "
+                f"snapshot of printer '{printer_id}'{detail}"
+            )
+        return payload
 
     async def async_get_status(self) -> Snapshot:
         """Fetch and parse GET /api/status."""

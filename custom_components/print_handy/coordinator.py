@@ -30,6 +30,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SPOOL_INTERVAL,
     DOMAIN,
+    EVENT_PRINT_FINISHED,
     HUB_RETRY_INTERVAL,
 )
 from .model import PrinterSpools, Snapshot
@@ -122,7 +123,39 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
             raise UpdateFailed(str(err)) from err
         except PrintHandyApiError as err:
             raise UpdateFailed(str(err)) from err
-        return dataclasses.replace(hub, statuses=statuses, spools=spools)
+        snapshot = dataclasses.replace(hub, statuses=statuses, spools=spools)
+        self._fire_print_finished_events(snapshot)
+        return snapshot
+
+    def _fire_print_finished_events(self, snapshot: Snapshot) -> None:
+        """Fire EVENT_PRINT_FINISHED for prints that just completed.
+
+        A completion is a live-state move from an active print state
+        ("printing" or "paused") to "complete" between two polls; the
+        first poll never fires (there is no previous state to move
+        from), and staying "complete" fires only on the transition.
+        The event is the automation hook issue #14 asked for: printer
+        id and display name, the finished file, and this entry's id.
+        """
+        previous = self.data
+        if previous is None:
+            return
+        for printer_id, status in snapshot.statuses.items():
+            if status.state != "complete":
+                continue
+            before = previous.statuses.get(printer_id)
+            if before is None or before.state not in ("printing", "paused"):
+                continue
+            printer = snapshot.printer(printer_id)
+            self.hass.bus.async_fire(
+                EVENT_PRINT_FINISHED,
+                {
+                    "entry_id": self.config_entry.entry_id,
+                    "printer_id": printer_id,
+                    "printer_name": printer.display_name if printer else printer_id,
+                    "filename": status.filename,
+                },
+            )
 
     async def _async_hub(self, now: float) -> Snapshot:
         """Return the hub snapshot: fresh when due, else the last good one.

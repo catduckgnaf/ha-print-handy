@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_URL
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
@@ -33,6 +33,7 @@ from .const import (
 )
 from .coordinator import PrintHandyDataUpdateCoordinator
 from .entity import async_ensure_instance_device
+from .repairs import async_sync_doctor_repairs
 
 LOGGER = logging.getLogger(__name__)
 
@@ -271,6 +272,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: PrintHandyConfigEntry) -
 
     await coordinator.async_config_entry_first_refresh()
     async_ensure_instance_device(coordinator)
+
+    @callback
+    def _sync_repairs() -> None:
+        async_sync_doctor_repairs(hass, entry, coordinator)
+
+    _sync_repairs()
+    entry.async_on_unload(coordinator.async_add_listener(_sync_repairs))
 
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 

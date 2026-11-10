@@ -36,6 +36,12 @@
       },
       "connection": {
         "default": "mdi:connection"
+      },
+      "slot_spool_weight": {
+        "default": "mdi:scale"
+      },
+      "faults": {
+        "default": "mdi:alert"
       }
     },
     "button": {
@@ -64,6 +70,11 @@
       },
       "bed_target_temperature": {
         "default": "mdi:bed"
+      }
+    },
+    "camera": {
+      "camera": {
+        "default": "mdi:camera"
       }
     }
   }
