@@ -72,7 +72,9 @@ class InstanceInfo:
     bot_platform: str = ""
     bot_mode: str = ""
     bot_connected: bool | None = None
-    spoolman_ok: bool = False
+    # None when Spoolman is not configured (the server sends null): that is
+    # not the same as a configured Spoolman that is down (False).
+    spoolman_ok: bool | None = None
     spoolman_url: str = ""
     spoolman_bundled: bool = False
     doctor_failures: int = 0
@@ -476,7 +478,7 @@ def parse_snapshot(raw: Any) -> Snapshot:
         bot_connected=heartbeat.get("connected")
         if isinstance(heartbeat.get("connected"), bool)
         else None,
-        spoolman_ok=_as_bool(spoolman.get("ok")),
+        spoolman_ok=spoolman.get("ok") if isinstance(spoolman.get("ok"), bool) else None,
         spoolman_url=str(spoolman.get("url") or ""),
         spoolman_bundled=_as_bool(spoolman.get("bundled")),
         doctor_failures=sum(1 for row in doctor if isinstance(row, dict) and row.get("status") == "fail"),

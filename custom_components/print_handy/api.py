@@ -7,7 +7,8 @@ per-printer endpoint landed (Print Handy #664), ``GET
 the control surface (Print Handy #708): ``POST
 /api/printers/<id>/pause|resume|cancel`` and ``POST
 /api/printers/<id>/target``. Auth is the optional ``X-WebUI-Token``
-header — the same access token the Web UI login uses. The token lives
+header — the same access token the Web UI login uses; the server also
+accepts the Web UI password there. The token lives
 only in the config entry, is sent only as that header, and never
 appears in a response.
 
@@ -78,6 +79,17 @@ from .model import (
 
 LOGGER = logging.getLogger(__name__)
 
+DEFAULT_RETRY_AFTER = 60
+MAX_RETRY_AFTER = 3600
+
+HOST_REFUSED_MESSAGE = (
+    "Print Handy refused the request because of the address it was sent to. "
+    "With no Web UI password set, the server only answers by IP address or a "
+    "local host name (a single word, or ending in .local, .lan, .home, "
+    ".internal or .home.arpa). Use the server's IP address in the URL, or set "
+    "a Web UI password in Print Handy and enter it as the access token."
+)
+
 
 class PrintHandyApiError(Exception):
     """Base error for the Print Handy API client."""
@@ -89,6 +101,38 @@ class PrintHandyAuthError(PrintHandyApiError):
 
 class PrintHandyConnectionError(PrintHandyApiError):
     """The Web UI could not be reached at all."""
+
+
+class PrintHandyRateLimitedError(PrintHandyApiError):
+    """The Web UI is rate-limiting this client (HTTP 429).
+
+    The server answers 429 with ``Retry-After`` while it is locking out an
+    address after repeated wrong tokens, even for a correct token, so the
+    right response is to stop sending requests until the wait is over.
+    ``retry_after`` is that wait in seconds.
+    """
+
+    def __init__(self, message: str, retry_after: int = 60) -> None:
+        """Keep the wait the server asked for."""
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class PrintHandyHostRefusedError(PrintHandyApiError):
+    """The Web UI refused the request's Host header (HTTP 403 on a read).
+
+    A Web UI with no password only answers requests whose Host is an IP
+    address, a single-label name or a private-use suffix (DNS-rebinding
+    guard), so a public-looking host name in the URL is refused.
+    """
+
+
+class PrintHandyServerError(PrintHandyApiError):
+    """The Web UI answered with a server error (HTTP 5xx)."""
+
+
+class PrintHandyResponseError(PrintHandyApiError):
+    """The Web UI answered, but not with a body this client can use."""
 
 
 class PrintHandyControlRefusedError(PrintHandyApiError):
@@ -116,6 +160,31 @@ class PrintHandySpoolRefusedError(PrintHandyApiError):
     """
 
 
+def _reason(body: Any) -> str:
+    """Return the server's ``reason`` from a JSON error body, or an empty string."""
+    if isinstance(body, dict):
+        return str(body.get("reason") or "")
+    return ""
+
+
+def _detail(body: Any) -> str:
+    """``: <reason>`` for an error message when the body names one."""
+    reason = _reason(body)
+    return f": {reason}" if reason else ""
+
+
+def _retry_after(headers: Any) -> int | None:
+    """Return the ``Retry-After`` wait in whole seconds, clamped, or None."""
+    if headers is None:
+        return None
+    try:
+        raw = headers.get("Retry-After")
+        seconds = int(float(str(raw).strip()))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return max(1, min(seconds, MAX_RETRY_AFTER))
+
+
 def normalize_base_url(url: str) -> str:
     """Normalize a user-entered Web UI URL: scheme assumed http, no trailing slash."""
     cleaned = str(url or "").strip().rstrip("/")
@@ -124,6 +193,15 @@ def normalize_base_url(url: str) -> str:
     if "://" not in cleaned:
         cleaned = f"http://{cleaned}"
     return cleaned
+
+
+# Errors that concern the whole connection rather than one printer; the
+# batch polls re-raise them instead of turning them into unavailable rows.
+_ENTRY_WIDE_ERRORS = (
+    PrintHandyAuthError,
+    PrintHandyRateLimitedError,
+    PrintHandyHostRefusedError,
+)
 
 
 class PrintHandyApiClient:
@@ -140,11 +218,13 @@ class PrintHandyApiClient:
 
     async def _async_request_json(
         self, method: str, url: str, json_body: Any = None
-    ) -> tuple[int, Any]:
-        """Send a request, returning (HTTP status, decoded JSON body if any).
+    ) -> tuple[int, Any, int | None]:
+        """Send a request, returning (HTTP status, JSON body, Retry-After).
 
-        A 401 always raises PrintHandyAuthError; transport failures raise
-        PrintHandyConnectionError. Other statuses are the caller's call.
+        A 401 always raises PrintHandyAuthError; transport failures and
+        timeouts raise PrintHandyConnectionError. Other statuses are the
+        caller's call. ``Retry-After`` is the server's wait in seconds
+        when it sent a usable one, else None.
         """
         try:
             async with asyncio.timeout(REQUEST_TIMEOUT):
@@ -161,17 +241,42 @@ class PrintHandyApiClient:
                         body = await response.json()
                     except Exception:  # a body we cannot decode is no body
                         body = None
-                    return response.status, body
+                    return (
+                        response.status,
+                        body,
+                        _retry_after(getattr(response, "headers", None)),
+                    )
         except PrintHandyApiError:
             raise
+        except TimeoutError as err:
+            raise PrintHandyConnectionError(
+                f"The Print Handy Web UI at {self.base_url} did not answer "
+                f"within {REQUEST_TIMEOUT} seconds"
+            ) from err
         except Exception as err:  # transport failure of any flavor
             raise PrintHandyConnectionError(
-                f"Could not reach the Print Handy Web UI at {self.base_url}: {err}"
+                f"Could not reach the Print Handy Web UI at {self.base_url}: "
+                f"{err or type(err).__name__}"
             ) from err
 
     async def _async_get_json(self, url: str) -> tuple[int, Any]:
-        """GET a URL, returning (HTTP status, decoded JSON body if any)."""
-        return await self._async_request_json("get", url)
+        """GET a URL, returning (HTTP status, decoded JSON body if any).
+
+        A 429 and a 403 on a read concern the whole connection, not one
+        printer (rate limiting, the Host-header guard), so they raise
+        their own errors here; every other status is the caller's call.
+        """
+        status, body, retry_after = await self._async_request_json("get", url)
+        if status == 429:
+            wait = retry_after or DEFAULT_RETRY_AFTER
+            raise PrintHandyRateLimitedError(
+                "Print Handy is rate-limiting this client after failed access "
+                f"attempts; waiting {wait} seconds before trying again",
+                wait,
+            )
+        if status == 403:
+            raise PrintHandyHostRefusedError(HOST_REFUSED_MESSAGE)
+        return status, body
 
     async def _async_post_control(
         self, url: str, what: str, json_body: Any = None
@@ -188,27 +293,55 @@ class PrintHandyApiClient:
         raise the generic API error; auth and transport failures raise
         as everywhere else in this client.
         """
-        status, body = await self._async_request_json("post", url, json_body)
+        status, body, retry_after = await self._async_request_json(
+            "post", url, json_body
+        )
         if 200 <= status < 300:
             return
+        reason = _reason(body)
+        if status == 403 and not reason:
+            # The Host-header guard answers 403 as plain text, not the
+            # control gate's JSON reason.
+            reason = (
+                "Print Handy gave no reason. If controls are enabled there, "
+                "it may be refusing the host name in the URL: use the "
+                "server's IP address, or set a Web UI password and use it as "
+                "the access token"
+            )
+        if status == 429:
+            reason = reason or "too many failed attempts"
+            if retry_after:
+                reason = f"{reason}; try again in {retry_after} seconds"
+        detail = f": {reason}" if reason else ""
         if status in (400, 403, 404, 409, 501):
-            reason = ""
-            if isinstance(body, dict):
-                reason = str(body.get("reason") or "")
-            detail = f": {reason}" if reason else ""
             raise PrintHandyControlRefusedError(
                 f"Print Handy refused {what} (HTTP {status}){detail}"
             )
+        # 5xx (the server's 502 reasons end with "Nothing sent." for a
+        # printer it could not reach), 429 and anything else: still carry
+        # the server's reason, which matters most for emergency stop.
         raise PrintHandyApiError(
-            f"Print Handy Web UI returned HTTP {status} for {what}"
+            f"Print Handy Web UI returned HTTP {status} for {what}{detail}"
         )
 
     async def async_get_status(self) -> Snapshot:
         """Fetch and parse GET /api/status."""
         status, body = await self._async_get_json(f"{self.base_url}{STATUS_PATH}")
+        if status >= 500:
+            raise PrintHandyServerError(
+                f"Print Handy Web UI returned HTTP {status}{_detail(body)}; "
+                "its self-check may be failing"
+            )
         if status != 200:
-            raise PrintHandyApiError(f"Print Handy Web UI returned HTTP {status}")
-        return parse_snapshot(body)
+            raise PrintHandyApiError(
+                f"Print Handy Web UI returned HTTP {status}{_detail(body)}"
+            )
+        try:
+            return parse_snapshot(body)
+        except (TypeError, ValueError, KeyError) as err:
+            raise PrintHandyResponseError(
+                f"Print Handy answered, but not with a usable status snapshot: {err}"
+            ) from err
 
     async def async_get_printer_status(self, printer_id: str) -> PrinterStatus:
         """Fetch and parse GET /api/printers/<id>/status for one printer.
@@ -237,15 +370,23 @@ class PrintHandyApiClient:
 
         One printer failing (HTTP error, transport error, unparsable
         body) yields that printer's unavailable status and never fails
-        the batch. Only an auth rejection (401) propagates, because the
-        whole entry's credential is wrong, not one printer.
+        the batch. The entry-wide errors propagate (401, 429 and a
+        refused Host header concern the whole connection), and so does
+        a transport failure on every printer at once, which means the
+        Web UI itself is unreachable.
         """
+
+        outage: list[PrintHandyConnectionError] = []
 
         async def _one(printer_id: str) -> PrinterStatus:
             try:
                 return await self.async_get_printer_status(printer_id)
-            except PrintHandyAuthError:
+            except _ENTRY_WIDE_ERRORS:
                 raise
+            except PrintHandyConnectionError as err:
+                outage.append(err)
+                LOGGER.debug("Status for printer %s failed: %s", printer_id, err)
+                return unavailable_status(printer_id, str(err))
             except PrintHandyApiError as err:
                 LOGGER.debug("Status for printer %s failed: %s", printer_id, err)
                 return unavailable_status(printer_id, str(err))
@@ -257,9 +398,14 @@ class PrintHandyApiClient:
             *(_one(printer_id) for printer_id in printer_ids),
             return_exceptions=True,
         )
+        if printer_ids and len(outage) == len(printer_ids):
+            # Every printer's request failed at the transport level: the
+            # Web UI itself is unreachable, which is an update failure,
+            # not a roster of individually unavailable printers.
+            raise outage[0]
         statuses: dict[str, PrinterStatus] = {}
         for printer_id, result in zip(printer_ids, results, strict=True):
-            if isinstance(result, PrintHandyAuthError):
+            if isinstance(result, _ENTRY_WIDE_ERRORS):
                 raise result
             if isinstance(result, PrinterStatus):
                 statuses[printer_id] = result
@@ -382,13 +528,13 @@ class PrintHandyApiClient:
 
         Mirrors async_get_printer_statuses: one printer failing yields
         that printer's unavailable view and never fails the batch;
-        only an auth rejection (401) propagates.
+        only the entry-wide errors (401, 429, a refused Host) propagate.
         """
 
         async def _one(printer_id: str) -> PrinterSpools:
             try:
                 return await self.async_get_printer_spools(printer_id)
-            except PrintHandyAuthError:
+            except _ENTRY_WIDE_ERRORS:
                 raise
             except PrintHandyApiError as err:
                 LOGGER.debug("Spools for printer %s failed: %s", printer_id, err)
@@ -403,7 +549,7 @@ class PrintHandyApiClient:
         )
         views: dict[str, PrinterSpools] = {}
         for printer_id, result in zip(printer_ids, results, strict=True):
-            if isinstance(result, PrintHandyAuthError):
+            if isinstance(result, _ENTRY_WIDE_ERRORS):
                 raise result
             if isinstance(result, PrinterSpools):
                 views[printer_id] = result
@@ -431,14 +577,12 @@ class PrintHandyApiClient:
             printer_id=quote(printer_id, safe=""), action=action
         )
         what = f"the spool {action} action for printer '{printer_id}'"
-        status, body = await self._async_request_json(
+        status, body, _ = await self._async_request_json(
             "post", f"{self.base_url}{path}", json_body
         )
         if 200 <= status < 300:
             return body if isinstance(body, dict) else {}
-        reason = ""
-        if isinstance(body, dict):
-            reason = str(body.get("reason") or "")
+        reason = _reason(body)
         if reason:
             raise PrintHandySpoolRefusedError(
                 f"Print Handy refused {what} (HTTP {status}): {reason}"

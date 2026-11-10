@@ -2,16 +2,26 @@
 
 A Home Assistant custom integration for [Print Handy](https://github.com/catduckgnaf/print-handy) — every printer Print Handy manages, in one integration, instead of a separate Moonraker, OctoPrint or vendor integration per printer.
 
-## What it does today (0.5.1)
+## Supported versions
 
-The integration polls the Print Handy Web UI's status API (`GET /api/status` for the instance and roster, `GET /api/printers/<id>/status` for each printer's live status, `GET /api/printers/<id>/spools` for each printer's spool assignments) and creates:
+Developed and tested against Print Handy 2.2.7. Print Handy 2.2.2 is the oldest release with the per-printer status endpoint this integration needs; older releases are not supported. The Emergency stop, restart, `send_gcode` and `exclude_object` features need a build that has those routes (see below). Newer releases are expected to keep working because the API only grows. Home Assistant 2024.11 or newer is required.
+
+## What it does today (0.6.0)
+
+The integration polls Print Handy's Web UI API at three cadences, because `GET /api/status` makes the server run its whole self-check:
+
+- `GET /api/status` (roster, versions, service health, doctor rows): once at startup and then every 5 minutes (option: *Instance status interval*). A slow or failed refresh keeps the last roster, makes only the instance-level entities unavailable and retries after a minute; printers stay available while their own polls succeed.
+- `GET /api/printers/<id>/status` (live status of each printer): every 30 seconds (option: *Printer polling interval*).
+- `GET /api/printers/<id>/spools` (spool assignments): every 2 minutes, and immediately after a spool service call.
+
+A 429 reply (Print Handy locks an address out after repeated wrong tokens) makes the integration stop polling for the `Retry-After` wait instead of hammering the server. A 403 reply means the server refuses the host name in the URL (see Configuration). The integration creates:
 
 - **One device per printer** on the Print Handy roster:
-  - **Current state** sensor — `standby` / `printing` / `paused` / `complete` / `error` / `cancelled` / `unknown`, plus `unavailable` when Print Handy cannot read the printer (with the reason as an attribute).
+  - **Current state** sensor — `standby` / `printing` / `paused` / `complete` / `error` / `cancelled`. A state string Print Handy sends that is not in this list reads `unknown`, with the raw value in a `raw_state` attribute. When Print Handy cannot read the printer, every live entity of that printer is unavailable (Home Assistant's own state), not a made-up value.
   - **Print progress** (%) and **Filename** sensors.
   - **Nozzle temperature** and **Bed temperature** sensors, plus **Nozzle target temperature** / **Bed target temperature** sensors on printers whose adapter reports targets (Bambu, Elegoo SDCP, PrusaLink).
-  - **Pause**, **Resume** and **Cancel** buttons (phase 3) — one set per printer, acting only on that printer.
-  - **Emergency stop**, **Firmware restart** and **Server restart** buttons (0.5.0, issue #1) — one set per printer, acting only on that printer, each sending Print Handy's confirm body like Cancel does. A printer family with no such capability refuses on the Print Handy side and the press fails visibly here.
+  - **Pause**, **Resume** and **Cancel** buttons — one set per printer, acting only on that printer.
+  - **Emergency stop**, **Firmware restart** and **Moonraker restart** buttons — only on printers Print Handy reaches through Moonraker (every other family answers 501 on the server, so no button is created). The Moonraker restart restarts Moonraker, not Print Handy; its entity key is still `server_restart`. Home Assistant buttons have no confirmation step, so **Cancel, Emergency stop and both restarts are disabled by default**: enable them from the device's entity list. Entities you already enabled on 0.5.x stay enabled. Moonraker-only buttons that 0.5.x created for other printer families are removed.
   - **Current object** sensor (0.5.0, issue #1) — the object currently printing, with the full object list and the excluded objects as attributes, so cards and automations can see every object's name. Object data only exists while a print runs, so the sensor is created the first time a poll reports it (a printer idle at startup gains it when its print starts); printers that never report objects gain no sensor.
   - **Nozzle target temperature** / **Bed target temperature** numbers (phase 3) — writable versions of the target sensors, created only on printers whose adapter reports targets; the read-only sensors stay for history and cards.
   - **Estimated finish time** (timestamp) and **Time remaining** sensors on printers that report remaining time.
@@ -23,16 +33,18 @@ The integration polls the Print Handy Web UI's status API (`GET /api/status` for
   - **Connection** diagnostic sensor — how Print Handy reaches the printer (`moonraker`, `octoprint`, `bambulab_lan`, ...), with model, vendor and listener detail as attributes.
 - **One Print Handy instance device**:
   - **Status** sensor (`ok` / `problem`), **Version** and **Doctor failures** diagnostic sensors.
-  - **Bot connected** and **Spoolman connected** connectivity binary sensors.
+  - **Bot connected** and **Spoolman connected** connectivity binary sensors. Spoolman connected reads unknown when Spoolman is not configured, and off only when a configured Spoolman is down.
 
-Entity ids use one fixed suffix vocabulary per printer (`_current_state`, `_print_progress`, `_filename`, `_nozzle_temperature`, `_bed_temperature`, `_estimated_finish_time`, `_current_layer`, `_current_object`, `_slot_1_spool` … `_slot_4_spool`, plus button suffixes `_pause`, `_resume`, `_cancel`, `_emergency_stop`, `_firmware_restart`, `_server_restart`), so dashboards and cards can hard-code them safely — see [DESIGN.md](DESIGN.md).
+Entity ids use one fixed suffix vocabulary per printer (`_current_state`, `_print_progress`, `_filename`, `_nozzle_temperature`, `_bed_temperature`, `_estimated_finish_time`, `_current_layer`, `_current_object`, `_slot_1_spool` … `_slot_4_spool`, plus button suffixes `_pause`, `_resume`, `_cancel`, `_emergency_stop`, `_firmware_restart`; the Moonraker restart is `_moonraker_restart` on new installs and keeps its old `_server_restart` id where it already exists), so dashboards and cards can hard-code them safely — see [DESIGN.md](DESIGN.md).
 
-## Control services (0.5.0)
+## Control services
 
-Two services act on one named printer through Print Handy's control API (issue #1) — they act only on that printer, never on a default or fallback printer:
+**Security: `send_gcode` hands the text you give it to the printer.** Print Handy enforces a temperature ceiling and refuses in unsafe states, and its controls are off by default, but a G-code command can still start a print from the printer's storage or move the machine. Restrict who can call this service (administrators and trusted automations only) and never build the script from untrusted input.
 
-- `print_handy.send_gcode` — fields: `printer_id`, `script`. Sends the G-code script text to that printer. Print Handy and the printer decide whether to honor it; a refusal fails the call visibly with Print Handy's reason.
-- `print_handy.exclude_object` — fields: `printer_id`, `object`. Excludes the named object (use the names on the **Current object** sensor) from the print running on that printer. Excluding the last remaining object is refused by Print Handy — its reason, carried into the failed call, says to cancel the print instead. An unknown object name is refused the same way.
+All services take the printer either as a device target (pick the printer's device) or as the free-text Print Handy `printer_id` field, which still works. They act only on the printers they name, never on a default or fallback printer:
+
+- `print_handy.send_gcode` — fields: `printer_id` (or a device target), `script`. Sends the G-code script text to that printer. Print Handy and the printer decide whether to honor it; a refusal fails the call visibly with Print Handy's reason.
+- `print_handy.exclude_object` — fields: `printer_id` (or a device target), `object`. Moonraker printers only. Excludes the named object (use the names on the **Current object** sensor) from the print running on that printer. Excluding the last remaining object is refused by Print Handy — its reason, carried into the failed call, says to cancel the print instead. An unknown object name is refused the same way.
 
 ## Spool services (0.4.0)
 
@@ -83,13 +95,19 @@ Copy `custom_components/print_handy/` into your Home Assistant `config/custom_co
 
 1. In Print Handy, make sure the **Web UI is enabled** (`[webui] enabled = true` with a port, reachable from Home Assistant). If the Web UI binds beyond loopback, Print Handy requires an access token — it is the value of the `WEBUI_ACCESS_TOKEN` environment variable on the Print Handy side.
 2. In Home Assistant: **Settings → Devices & services → Add integration → Print Handy**.
-3. Enter the Web UI URL (for example `http://print-handy.local:8080`) and the access token (leave the token empty only for a loopback install with no token configured).
-4. Options let you change the polling interval (default 30 seconds).
+3. Enter the Web UI URL and the credential. Use the server's **IP address** or a local host name: while the Web UI has no password, Print Handy refuses requests that use a public-looking host name (anything with a dot that is not `.local`, `.lan`, `.home`, `.internal` or `.home.arpa`), and the setup form says so. The credential field takes either the Web UI **access token** (`WEBUI_ACCESS_TOKEN`) or the Web UI **password**; both work in the same header. A Print Handy install with no password is open on the network by design, so the field is simply optional there.
+4. Options change the printer polling interval (default 30 seconds) and the instance status interval (default 300 seconds).
+5. To change the URL or credential later, use **Reconfigure** on the integration entry. Entity and device ids hang off a stable instance id, not the URL, so switching from a host name to an IP address or from http to https keeps every entity and its history. If the credential stops working, Home Assistant asks for a new one (it may be left empty for a server that went back to open).
+
+### Upgrading from 0.5.x
+
+The config entry migrates itself on the first start: entity and device registry rows are rewritten in place, so entity ids, history and automations are kept. Entity names now come from translations and icons from `icons.json`.
 
 ## Notes
 
 - Polling is read-only; commands are sent only when you press a control button, set a target temperature or call a service (spool, `send_gcode` or `exclude_object`), and only to Print Handy (never directly to a printer). Print Handy decides whether to honor them — its controls gate is off by default.
-- The token is stored only in the config entry and sent only as the `X-WebUI-Token` header.
+- The access token or password is stored only in the config entry and sent only as the `X-WebUI-Token` header. Diagnostics downloads redact the URL, token and server host name.
+- Temperature number limits are the fixed 0-350 (nozzle) and 0-150 (bed) UI bounds; Print Handy's status payload does not expose per-printer limits, and Print Handy and the printer refuse out-of-range values.
 - Print Handy's optional MQTT events (`print-handy/<event>`) work unchanged alongside this integration for automations that only need print started/finished notifications today.
 
 ## Support and community

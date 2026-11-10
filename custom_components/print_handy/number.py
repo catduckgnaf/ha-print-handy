@@ -39,7 +39,11 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import PrintHandyConfigEntry
 from .coordinator import PrintHandyDataUpdateCoordinator
-from .entity import PrintHandyPrinterEntity
+from .entity import (
+    PrintHandyPrinterEntity,
+    async_add_entities_as_known,
+    printer_unique_id,
+)
 from .model import PrinterInfo
 
 LOGGER = logging.getLogger(__name__)
@@ -70,15 +74,13 @@ class PrintHandyNumberEntityDescription(NumberEntityDescription):
 PRINTER_NUMBERS: tuple[PrintHandyNumberEntityDescription, ...] = (
     PrintHandyNumberEntityDescription(
         key="nozzle_target_temperature",
-        name="Nozzle target temperature",
-        icon="mdi:printer-3d-nozzle",
+        translation_key="nozzle_target_temperature",
         heater="hotend",
         present_fn=lambda status: status.hotend_target_c is not None,
     ),
     PrintHandyNumberEntityDescription(
         key="bed_target_temperature",
-        name="Bed target temperature",
-        icon="mdi:bed",
+        translation_key="bed_target_temperature",
         heater="bed",
         present_fn=lambda status: status.bed_target_c is not None,
     ),
@@ -92,18 +94,24 @@ async def async_setup_entry(
 ) -> None:
     """Set up Print Handy numbers from a config entry."""
     coordinator: PrintHandyDataUpdateCoordinator = entry.runtime_data
-    entities: list[NumberEntity] = []
-    if coordinator.data is not None:
-        for printer in coordinator.data.printers:
-            status = coordinator.data.status(printer.printer_id)
-            if status is None:
-                continue
-            entities.extend(
-                PrintHandyPrinterTargetNumber(coordinator, entry, printer, description)
-                for description in PRINTER_NUMBERS
-                if description.present_fn is None or description.present_fn(status)
-            )
-    async_add_entities(entities)
+
+    def build() -> list[NumberEntity]:
+        entities: list[NumberEntity] = []
+        if coordinator.data is not None:
+            for printer in coordinator.data.printers:
+                status = coordinator.data.status(printer.printer_id)
+                if status is None:
+                    continue
+                entities.extend(
+                    PrintHandyPrinterTargetNumber(
+                        coordinator, entry, printer, description
+                    )
+                    for description in PRINTER_NUMBERS
+                    if description.present_fn is None or description.present_fn(status)
+                )
+        return entities
+
+    async_add_entities_as_known(coordinator, entry, async_add_entities, build)
 
 
 class PrintHandyPrinterTargetNumber(PrintHandyPrinterEntity, NumberEntity):
@@ -111,6 +119,7 @@ class PrintHandyPrinterTargetNumber(PrintHandyPrinterEntity, NumberEntity):
 
     entity_description: PrintHandyNumberEntityDescription
 
+    _requires_live_status = True
     _attr_device_class = NumberDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_native_step = 1.0
@@ -125,9 +134,8 @@ class PrintHandyPrinterTargetNumber(PrintHandyPrinterEntity, NumberEntity):
         """Initialize."""
         super().__init__(coordinator, entry, printer)
         self.entity_description = description
-        self._attr_unique_id = (
-            f"{coordinator.client.base_url}:printer:{printer.printer_id}"
-            f":number:{description.key}"
+        self._attr_unique_id = printer_unique_id(
+            coordinator, printer.printer_id, f"number:{description.key}"
         )
         low, high = _HEATER_BOUNDS[description.heater]
         self._attr_native_min_value = low

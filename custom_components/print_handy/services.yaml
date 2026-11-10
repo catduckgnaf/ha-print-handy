@@ -2,10 +2,18 @@ assign_spool:
   name: Assign spool
   description: Assign a spool to a slot on one printer. A spool already in the slot goes back on the shelf.
   fields:
+    device_id:
+      name: Printer device
+      description: Pick the printer's device instead of typing its id. Several devices run the service on each.
+      required: false
+      selector:
+        device:
+          integration: print_handy
+          multiple: true
     printer_id:
-      name: Printer
-      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it.
-      required: true
+      name: Printer id
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it. Optional when you pick the printer's device as the target.
+      required: false
       example: flashforge-ad5x
       selector:
         text:
@@ -34,10 +42,18 @@ swap_spools:
   name: Swap spools
   description: Swap the spools in two slots on one printer.
   fields:
+    device_id:
+      name: Printer device
+      description: Pick the printer's device instead of typing its id. Several devices run the service on each.
+      required: false
+      selector:
+        device:
+          integration: print_handy
+          multiple: true
     printer_id:
-      name: Printer
-      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it.
-      required: true
+      name: Printer id
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it. Optional when you pick the printer's device as the target.
+      required: false
       example: flashforge-ad5x
       selector:
         text:
@@ -67,10 +83,18 @@ unassign_spool:
   name: Unassign spool
   description: Unassign a slot on one printer. The spool goes back on the shelf.
   fields:
+    device_id:
+      name: Printer device
+      description: Pick the printer's device instead of typing its id. Several devices run the service on each.
+      required: false
+      selector:
+        device:
+          integration: print_handy
+          multiple: true
     printer_id:
-      name: Printer
-      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it.
-      required: true
+      name: Printer id
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it. Optional when you pick the printer's device as the target.
+      required: false
       example: flashforge-ad5x
       selector:
         text:
@@ -89,10 +113,18 @@ add_spool:
   name: Add spool
   description: Create a new spool on the shelf for one printer. Load it into a slot afterwards with Assign spool.
   fields:
+    device_id:
+      name: Printer device
+      description: Pick the printer's device instead of typing its id. Several devices run the service on each.
+      required: false
+      selector:
+        device:
+          integration: print_handy
+          multiple: true
     printer_id:
-      name: Printer
-      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it.
-      required: true
+      name: Printer id
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it. Optional when you pick the printer's device as the target.
+      required: false
       example: flashforge-ad5x
       selector:
         text:
@@ -138,21 +170,37 @@ sync_spools:
   name: Sync spools
   description: Reconcile one printer's slot state with Spoolman.
   fields:
+    device_id:
+      name: Printer device
+      description: Pick the printer's device instead of typing its id. Several devices run the service on each.
+      required: false
+      selector:
+        device:
+          integration: print_handy
+          multiple: true
     printer_id:
-      name: Printer
-      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it.
-      required: true
+      name: Printer id
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it. Optional when you pick the printer's device as the target.
+      required: false
       example: flashforge-ad5x
       selector:
         text:
 send_gcode:
   name: Send G-code
-  description: Send a G-code script to one printer, through Print Handy's control API. Print Handy decides whether to honor it; a refusal fails the call with its reason.
+  description: Send a G-code script to one printer, through Print Handy's control API. The script is passed to the printer as given and can start a print or move the machine, so restrict who can call this service. Print Handy decides whether to honor it; a refusal fails the call with its reason.
   fields:
+    device_id:
+      name: Printer device
+      description: Pick the printer's device instead of typing its id. Several devices run the service on each.
+      required: false
+      selector:
+        device:
+          integration: print_handy
+          multiple: true
     printer_id:
-      name: Printer
-      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it.
-      required: true
+      name: Printer id
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it. Optional when you pick the printer's device as the target.
+      required: false
       example: flashforge-ad5x
       selector:
         text:
@@ -165,12 +213,20 @@ send_gcode:
         text:
 exclude_object:
   name: Exclude object
-  description: Exclude one object from the print running on one printer, by the object name shown on the Current object sensor. Excluding the last remaining object is refused — Print Handy's reason says to cancel the print instead.
+  description: Exclude one object from the print running on one Moonraker printer, by the object name shown on the Current object sensor. Excluding the last remaining object is refused — Print Handy's reason says to cancel the print instead.
   fields:
+    device_id:
+      name: Printer device
+      description: Pick the printer's device instead of typing its id. Several devices run the service on each.
+      required: false
+      selector:
+        device:
+          integration: print_handy
+          multiple: true
     printer_id:
-      name: Printer
-      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it.
-      required: true
+      name: Printer id
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it. Optional when you pick the printer's device as the target.
+      required: false
       example: flashforge-ad5x
       selector:
         text:

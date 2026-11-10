@@ -4,7 +4,7 @@ from homeassistant.const import Platform
 
 NAME = "Print Handy"
 DOMAIN = "print_handy"
-VERSION = "0.5.1"
+VERSION = "0.6.0"
 ATTRIBUTION = "Data provided by Print Handy"
 ISSUE_URL = "https://github.com/catduckgnaf/ha-print-handy/issues"
 
@@ -18,9 +18,27 @@ PLATFORMS: list[Platform] = [
 # Configuration constants
 CONF_TOKEN = "token"
 CONF_SCAN_INTERVAL = "scan_interval"
+CONF_HUB_SCAN_INTERVAL = "hub_scan_interval"
+# Stable identity of one Print Handy instance inside Home Assistant. It
+# is minted once per entry (a random id for new entries, the config entry
+# id for entries migrated from 0.5.x) so changing the URL never changes
+# an entity or device id.
+CONF_INSTANCE_ID = "instance_id"
 
-DEFAULT_SCAN_INTERVAL = 30
+# Cadences. /api/status makes the server run its whole self-diagnosis
+# (it launches the slicer and probes every service), so it is the slow
+# poll; the per-printer status endpoint is cheap and is the fast one.
+DEFAULT_SCAN_INTERVAL = 30  # per-printer live status
+DEFAULT_HUB_SCAN_INTERVAL = 300  # /api/status: roster, versions, health
+DEFAULT_SPOOL_INTERVAL = 120  # spools views (a Spoolman read per printer)
+HUB_RETRY_INTERVAL = 60  # retry a failed hub refresh after this long
+MIN_SCAN_INTERVAL = 10
+MIN_HUB_SCAN_INTERVAL = 60
 REQUEST_TIMEOUT = 15
+
+# The estimated-finish sensor only moves when the projection shifts by
+# more than this many seconds, so it does not rewrite on every poll.
+FINISH_TOLERANCE_SECONDS = 120
 
 # Print Handy's Web UI status API.
 STATUS_PATH = "/api/status"
@@ -59,6 +77,11 @@ CONTROL_PATHS = {
 # Button actions Print Handy refuses without an explicit confirm body;
 # the button press itself is that confirmation.
 CONFIRM_ACTIONS = ("cancel", "emergency_stop", "firmware_restart", "server_restart")
+
+# Connection type of the printers the server supports these on. Print
+# Handy answers 501 for every other family, so no button is created.
+MOONRAKER_CONNECTION = "moonraker"
+MOONRAKER_ONLY_ACTIONS = ("emergency_stop", "firmware_restart", "server_restart")
 
 # Print Handy's Web UI spool API (Print Handy #789). The read surface
 # is ``GET /api/printers/<id>/spools``; the write surface is

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import time
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
@@ -17,63 +18,175 @@ from .api import (
     PrintHandyApiClient,
     PrintHandyApiError,
     PrintHandyAuthError,
-    PrintHandyConnectionError,
+    PrintHandyHostRefusedError,
+    PrintHandyRateLimitedError,
 )
-from .const import CONF_SCAN_INTERVAL, CONF_TOKEN, DEFAULT_SCAN_INTERVAL, DOMAIN
-from .model import Snapshot
+from .const import (
+    CONF_HUB_SCAN_INTERVAL,
+    CONF_INSTANCE_ID,
+    CONF_SCAN_INTERVAL,
+    CONF_TOKEN,
+    DEFAULT_HUB_SCAN_INTERVAL,
+    DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SPOOL_INTERVAL,
+    DOMAIN,
+    HUB_RETRY_INTERVAL,
+)
+from .model import PrinterSpools, Snapshot
 
 LOGGER = logging.getLogger(__name__)
 
 
-class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
-    """Poll Print Handy's status API for the whole instance.
+def _monotonic() -> float:
+    """Return the clock the cadences run on (patched in tests)."""
+    return time.monotonic()
 
-    One coordinator per config entry: /api/status covers the instance
-    and roster, and each roster printer's live status is then polled
-    from /api/printers/<id>/status into the same snapshot, so all
-    devices read from this single update. A printer whose status poll
-    fails carries its unavailable status instead of failing the update.
-    The same poll also fetches each printer's spools view from
-    /api/printers/<id>/spools (#789) into the snapshot — no second
-    poller, and no spool state is stored in the integration beyond
-    this poll.
+
+def _option(entry: ConfigEntry, key: str, default: int) -> int:
+    """One integer option, falling back to the entry data and then the default."""
+    return int(entry.options.get(key) or entry.data.get(key) or default)
+
+
+class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
+    """Poll Print Handy for the whole instance, each part at its own cadence.
+
+    One coordinator per config entry, ticking on the fast per-printer
+    interval. ``GET /api/status`` (roster, versions, service health and the
+    doctor rows) makes the server run its whole self-diagnosis, so it is
+    fetched on a slow interval (and once at startup and on reload) and the
+    last good copy is reused between fetches. Each roster printer's live
+    status from ``/api/printers/<id>/status`` is cheap and is read on every
+    tick. The spools views (a Spoolman read per printer) are read on their
+    own slow interval and right after a spool service call.
+
+    A failed hub refresh never fails the update while the per-printer
+    reads succeed: the previous roster stays, ``hub_error`` records why and
+    only the instance-level entities go unavailable. A printer whose status
+    read fails carries its unavailable status instead of failing the
+    update. A 429 backs the whole entry off for the server's Retry-After.
     """
 
     config_entry: ConfigEntry
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize."""
-        self.config_entry = entry
-        interval = int(
-            entry.options.get(CONF_SCAN_INTERVAL)
-            or entry.data.get(CONF_SCAN_INTERVAL)
-            or DEFAULT_SCAN_INTERVAL
+        interval = _option(entry, CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+        self.hub_interval = _option(
+            entry, CONF_HUB_SCAN_INTERVAL, DEFAULT_HUB_SCAN_INTERVAL
         )
+        self.instance_key = str(entry.data.get(CONF_INSTANCE_ID) or entry.entry_id)
         session = async_get_clientsession(hass)
         self.client = PrintHandyApiClient(
             session=session,
             base_url=str(entry.data.get(CONF_URL, "")),
             token=str(entry.data.get(CONF_TOKEN, "")),
         )
+        self.hub_error: str | None = None
+        self._hub_fetched: float | None = None
+        self._spools_fetched: float | None = None
+        self._force_spools = False
+        self._backoff_until = 0.0
         super().__init__(
             hass,
             LOGGER,
             name=f"{DOMAIN} ({self.client.base_url})",
+            config_entry=entry,
             update_interval=timedelta(seconds=interval),
         )
 
+    @property
+    def hub_available(self) -> bool:
+        """True while the last hub refresh succeeded."""
+        return self.hub_error is None
+
     async def _async_update_data(self) -> Snapshot:
-        """Fetch the latest snapshot plus every printer's live status."""
+        """Fetch what is due: hub, every printer's live status, spools."""
+        now = _monotonic()
+        if now < self._backoff_until:
+            raise UpdateFailed(
+                "Print Handy is rate-limiting this client after failed access "
+                f"attempts; waiting {int(self._backoff_until - now) + 1} more "
+                "seconds before asking again"
+            )
         try:
-            snapshot = await self.client.async_get_status()
-            printer_ids = [printer.printer_id for printer in snapshot.printers]
+            hub = await self._async_hub(now)
+            printer_ids = [printer.printer_id for printer in hub.printers]
             statuses = await self.client.async_get_printer_statuses(printer_ids)
-            spools = await self.client.async_get_printer_spool_views(printer_ids)
+            spools = await self._async_spools(now, printer_ids)
         except PrintHandyAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
-        except PrintHandyConnectionError as err:
+        except PrintHandyRateLimitedError as err:
+            self._backoff_until = now + err.retry_after
             raise UpdateFailed(str(err)) from err
-        return dataclasses.replace(snapshot, statuses=statuses, spools=spools)
+        except PrintHandyHostRefusedError as err:
+            raise UpdateFailed(str(err)) from err
+        except PrintHandyApiError as err:
+            raise UpdateFailed(str(err)) from err
+        return dataclasses.replace(hub, statuses=statuses, spools=spools)
+
+    async def _async_hub(self, now: float) -> Snapshot:
+        """Return the hub snapshot: fresh when due, else the last good one.
+
+        A failed refresh keeps the previous roster and retries after
+        HUB_RETRY_INTERVAL; with no previous roster there is nothing to
+        keep, so the failure propagates. Auth, rate-limit and refused-host
+        errors always propagate: they concern every request.
+        """
+        previous = self.data
+        due = (
+            previous is None
+            or self._hub_fetched is None
+            or now - self._hub_fetched >= self.hub_interval
+        )
+        if not due:
+            return previous
+        try:
+            snapshot = await self.client.async_get_status()
+        except (
+            PrintHandyAuthError,
+            PrintHandyRateLimitedError,
+            PrintHandyHostRefusedError,
+        ):
+            raise
+        except PrintHandyApiError as err:
+            if previous is None:
+                raise
+            if self.hub_error is None:
+                LOGGER.warning(
+                    "Print Handy status refresh failed, keeping the last roster "
+                    "and retrying shortly: %s",
+                    err,
+                )
+            self.hub_error = str(err)
+            self._hub_fetched = now - self.hub_interval + HUB_RETRY_INTERVAL
+            return previous
+        if self.hub_error is not None:
+            LOGGER.info("Print Handy status refresh recovered")
+        self.hub_error = None
+        self._hub_fetched = now
+        return snapshot
+
+    async def _async_spools(
+        self, now: float, printer_ids: list[str]
+    ) -> dict[str, PrinterSpools]:
+        """Return the spools views: re-read when due or forced, else the last ones."""
+        previous = self.data.spools if self.data is not None else {}
+        due = (
+            self._force_spools
+            or self._spools_fetched is None
+            or now - self._spools_fetched >= DEFAULT_SPOOL_INTERVAL
+            or any(printer_id not in previous for printer_id in printer_ids)
+        )
+        if not due:
+            return {
+                printer_id: previous[printer_id]
+                for printer_id in printer_ids
+                if printer_id in previous
+            }
+        views = await self.client.async_get_printer_spool_views(printer_ids)
+        self._force_spools = False
+        self._spools_fetched = now
+        return views
 
     async def async_control_printer(self, printer_id: str, action: str) -> None:
         """Send a button control action to one printer.
@@ -158,6 +271,9 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
             result = await coro
         except PrintHandyApiError as err:
             raise HomeAssistantError(str(err)) from err
+        # A spool write changes what the spools view says: re-read it now
+        # instead of waiting for the slow spools cadence.
+        self._force_spools = True
         await self.async_request_refresh()
         return result if isinstance(result, dict) else {}
 

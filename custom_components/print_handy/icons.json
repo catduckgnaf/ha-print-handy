@@ -1,0 +1,70 @@
+{
+  "entity": {
+    "sensor": {
+      "status": {
+        "default": "mdi:printer-3d-nozzle"
+      },
+      "version": {
+        "default": "mdi:tag"
+      },
+      "doctor_failures": {
+        "default": "mdi:stethoscope"
+      },
+      "current_state": {
+        "default": "mdi:printer-3d"
+      },
+      "print_progress": {
+        "default": "mdi:progress-clock"
+      },
+      "filename": {
+        "default": "mdi:file"
+      },
+      "current_layer": {
+        "default": "mdi:layers"
+      },
+      "total_layers": {
+        "default": "mdi:layers-triple"
+      },
+      "current_object": {
+        "default": "mdi:cube-outline"
+      },
+      "filament": {
+        "default": "mdi:printer-3d-nozzle"
+      },
+      "slot_spool": {
+        "default": "mdi:tray-full"
+      },
+      "connection": {
+        "default": "mdi:connection"
+      }
+    },
+    "button": {
+      "pause": {
+        "default": "mdi:pause"
+      },
+      "resume": {
+        "default": "mdi:play"
+      },
+      "cancel": {
+        "default": "mdi:cancel"
+      },
+      "emergency_stop": {
+        "default": "mdi:octagon"
+      },
+      "firmware_restart": {
+        "default": "mdi:restart"
+      },
+      "server_restart": {
+        "default": "mdi:server"
+      }
+    },
+    "number": {
+      "nozzle_target_temperature": {
+        "default": "mdi:printer-3d-nozzle"
+      },
+      "bed_target_temperature": {
+        "default": "mdi:bed"
+      }
+    }
+  }
+}
