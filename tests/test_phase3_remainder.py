@@ -19,6 +19,7 @@ pytest.importorskip("pytest_homeassistant_custom_component")
 
 from homeassistant.core import HomeAssistant  # noqa: E402
 from homeassistant.exceptions import HomeAssistantError  # noqa: E402
+from homeassistant.helpers import entity_registry as er  # noqa: E402
 
 from custom_components.print_handy import (  # noqa: E402
     SERVICE_EXCLUDE_OBJECT_SCHEMA,
@@ -173,9 +174,24 @@ def _button_ids(hass: HomeAssistant) -> list[str]:
     return sorted(state.entity_id for state in hass.states.async_all("button"))
 
 
+async def _enable_all_buttons(hass: HomeAssistant, entry) -> None:
+    """Turn on the buttons that are disabled by default, then reload."""
+    registry = er.async_get(hass)
+    for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if reg_entry.domain == "button" and reg_entry.disabled_by is not None:
+            registry.async_update_entity(reg_entry.entity_id, disabled_by=None)
+    with patch(
+        "custom_components.print_handy.coordinator.PrintHandyApiClient",
+        FakeApiClient,
+    ):
+        await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+
+
 async def test_all_six_buttons_are_created_per_printer(hass: HomeAssistant):
     """Pause/resume/cancel plus the three new buttons, with fixed suffixes."""
-    await _setup(hass)
+    entry = await _setup(hass)
+    await _enable_all_buttons(hass, entry)
     ids = _button_ids(hass)
     assert len(ids) == 6
     for suffix in (
@@ -184,7 +200,7 @@ async def test_all_six_buttons_are_created_per_printer(hass: HomeAssistant):
         "cancel",
         "emergency_stop",
         "firmware_restart",
-        "server_restart",
+        "moonraker_restart",  # key server_restart; named for what it restarts
     ):
         assert any(entity_id.endswith(f"_{suffix}") for entity_id in ids), suffix
 
@@ -193,7 +209,8 @@ async def test_emergency_stop_press_posts_only_to_that_printer(
     hass: HomeAssistant,
 ):
     """Pressing Emergency stop records the emergency_stop control action."""
-    await _setup(hass)
+    entry = await _setup(hass)
+    await _enable_all_buttons(hass, entry)
     entity_id = next(
         entity_id
         for entity_id in _button_ids(hass)
@@ -208,8 +225,9 @@ async def test_emergency_stop_press_posts_only_to_that_printer(
 
 async def test_restart_button_press_records_its_action(hass: HomeAssistant):
     """Firmware and server restart presses record their own actions."""
-    await _setup(hass)
-    for suffix in ("firmware_restart", "server_restart"):
+    entry = await _setup(hass)
+    await _enable_all_buttons(hass, entry)
+    for suffix in ("firmware_restart", "moonraker_restart"):
         entity_id = next(
             entity_id for entity_id in _button_ids(hass) if entity_id.endswith(f"_{suffix}")
         )
@@ -227,7 +245,8 @@ async def test_button_press_refusal_fails_visibly(hass: HomeAssistant):
         "Print Handy refused the emergency_stop action for printer "
         "'flashforge-ad5x' (HTTP 403): controls are disabled"
     )
-    await _setup(hass)
+    entry = await _setup(hass)
+    await _enable_all_buttons(hass, entry)
     entity_id = next(
         entity_id
         for entity_id in _button_ids(hass)

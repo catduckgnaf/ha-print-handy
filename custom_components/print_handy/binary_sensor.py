@@ -16,7 +16,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import PrintHandyConfigEntry
 from .coordinator import PrintHandyDataUpdateCoordinator
-from .entity import PrintHandyEntity, PrintHandyPrinterEntity
+from .entity import (
+    PrintHandyEntity,
+    PrintHandyPrinterEntity,
+    async_add_entities_as_known,
+    instance_unique_id,
+    printer_unique_id,
+)
 from .model import PrinterInfo
 
 LOGGER = logging.getLogger(__name__)
@@ -32,14 +38,15 @@ class PrintHandyBinarySensorEntityDescription(BinarySensorEntityDescription):
 INSTANCE_BINARY_SENSORS: tuple[PrintHandyBinarySensorEntityDescription, ...] = (
     PrintHandyBinarySensorEntityDescription(
         key="bot_connected",
-        name="Bot connected",
+        translation_key="bot_connected",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
         value_fn=lambda instance: instance.bot_connected,
     ),
     PrintHandyBinarySensorEntityDescription(
         key="spoolman_connected",
-        name="Spoolman connected",
+        translation_key="spoolman_connected",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
+        # None (shown as unknown) when Spoolman is not configured.
         value_fn=lambda instance: instance.spoolman_ok,
     ),
 )
@@ -52,22 +59,28 @@ async def async_setup_entry(
 ) -> None:
     """Set up Print Handy binary sensors from a config entry."""
     coordinator: PrintHandyDataUpdateCoordinator = entry.runtime_data
-    entities: list[BinarySensorEntity] = [
-        PrintHandyInstanceBinarySensor(coordinator, entry, description)
-        for description in INSTANCE_BINARY_SENSORS
-    ]
-    if coordinator.data is not None:
-        for printer in coordinator.data.printers:
-            entities.append(
-                PrintHandyPrinterOnlineBinarySensor(coordinator, entry, printer)
-            )
-            entities.append(
-                PrintHandyPrinterPrintingBinarySensor(coordinator, entry, printer)
-            )
-            entities.append(
-                PrintHandyPrinterPrintingErrorBinarySensor(coordinator, entry, printer)
-            )
-    async_add_entities(entities)
+
+    def build() -> list[BinarySensorEntity]:
+        entities: list[BinarySensorEntity] = [
+            PrintHandyInstanceBinarySensor(coordinator, entry, description)
+            for description in INSTANCE_BINARY_SENSORS
+        ]
+        if coordinator.data is not None:
+            for printer in coordinator.data.printers:
+                entities.append(
+                    PrintHandyPrinterOnlineBinarySensor(coordinator, entry, printer)
+                )
+                entities.append(
+                    PrintHandyPrinterPrintingBinarySensor(coordinator, entry, printer)
+                )
+                entities.append(
+                    PrintHandyPrinterPrintingErrorBinarySensor(
+                        coordinator, entry, printer
+                    )
+                )
+        return entities
+
+    async_add_entities_as_known(coordinator, entry, async_add_entities, build)
 
 
 class PrintHandyInstanceBinarySensor(PrintHandyEntity, BinarySensorEntity):
@@ -84,9 +97,7 @@ class PrintHandyInstanceBinarySensor(PrintHandyEntity, BinarySensorEntity):
         """Initialize."""
         super().__init__(coordinator, entry)
         self.entity_description = description
-        self._attr_unique_id = (
-            f"{coordinator.client.base_url}:instance:{description.key}"
-        )
+        self._attr_unique_id = instance_unique_id(coordinator, description.key)
 
     @property
     def is_on(self) -> bool | None:
@@ -104,7 +115,7 @@ class PrintHandyPrinterOnlineBinarySensor(PrintHandyPrinterEntity, BinarySensorE
     """
 
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
-    _attr_name = "Online"
+    _attr_translation_key = "online"
 
     def __init__(
         self,
@@ -114,7 +125,7 @@ class PrintHandyPrinterOnlineBinarySensor(PrintHandyPrinterEntity, BinarySensorE
     ) -> None:
         """Initialize."""
         super().__init__(coordinator, entry, printer)
-        self._attr_unique_id = f"{coordinator.client.base_url}:printer:{printer.printer_id}:online"
+        self._attr_unique_id = printer_unique_id(coordinator, printer.printer_id, "online")
 
     @property
     def is_on(self) -> bool | None:
@@ -127,7 +138,8 @@ class PrintHandyPrinterPrintingBinarySensor(PrintHandyPrinterEntity, BinarySenso
     """On while this printer's live status is "printing"."""
 
     _attr_device_class = BinarySensorDeviceClass.RUNNING
-    _attr_name = "Printing"
+    _attr_translation_key = "printing"
+    _requires_live_status = True
 
     def __init__(
         self,
@@ -137,7 +149,7 @@ class PrintHandyPrinterPrintingBinarySensor(PrintHandyPrinterEntity, BinarySenso
     ) -> None:
         """Initialize."""
         super().__init__(coordinator, entry, printer)
-        self._attr_unique_id = f"{coordinator.client.base_url}:printer:{printer.printer_id}:printing"
+        self._attr_unique_id = printer_unique_id(coordinator, printer.printer_id, "printing")
 
     @property
     def is_on(self) -> bool | None:
@@ -152,7 +164,8 @@ class PrintHandyPrinterPrintingErrorBinarySensor(
     """On while this printer's live status is "error" (problem class)."""
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
-    _attr_name = "Printing error"
+    _attr_translation_key = "printing_error"
+    _requires_live_status = True
 
     def __init__(
         self,
@@ -162,7 +175,9 @@ class PrintHandyPrinterPrintingErrorBinarySensor(
     ) -> None:
         """Initialize."""
         super().__init__(coordinator, entry, printer)
-        self._attr_unique_id = f"{coordinator.client.base_url}:printer:{printer.printer_id}:printing_error"
+        self._attr_unique_id = printer_unique_id(
+            coordinator, printer.printer_id, "printing_error"
+        )
 
     @property
     def is_on(self) -> bool | None:

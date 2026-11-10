@@ -19,8 +19,15 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import PrintHandyConfigEntry
+from .const import FINISH_TOLERANCE_SECONDS
 from .coordinator import PrintHandyDataUpdateCoordinator
-from .entity import PrintHandyEntity, PrintHandyPrinterEntity
+from .entity import (
+    PrintHandyEntity,
+    PrintHandyPrinterEntity,
+    async_add_entities_as_known,
+    instance_unique_id,
+    printer_unique_id,
+)
 from .model import (
     PrinterInfo,
     PrinterStatus,
@@ -33,8 +40,12 @@ from .model import (
 
 LOGGER = logging.getLogger(__name__)
 
-# Print Handy's normalized print states (adapters + the status endpoint's
-# own "unavailable"). The current-state enum sensor guards to this list.
+# Print Handy's normalized print states. The current-state enum sensor
+# passes these through. "unknown" is the documented fallback for any state
+# string Print Handy sends that is not in this list (the raw value rides
+# along as the ``raw_state`` attribute). A printer Print Handy cannot read
+# (state "unavailable" in the status endpoint) is reported by Home
+# Assistant's own unavailable state, never as a state value.
 PRINT_STATES = [
     "standby",
     "printing",
@@ -43,7 +54,6 @@ PRINT_STATES = [
     "error",
     "cancelled",
     "unknown",
-    "unavailable",
 ]
 
 
@@ -57,21 +67,18 @@ class PrintHandySensorEntityDescription(SensorEntityDescription):
 INSTANCE_SENSORS: tuple[PrintHandySensorEntityDescription, ...] = (
     PrintHandySensorEntityDescription(
         key="status",
-        name="Status",
-        icon="mdi:printer-3d-nozzle",
+        translation_key="status",
         value_fn=lambda instance: "ok" if instance.ok else "problem",
     ),
     PrintHandySensorEntityDescription(
         key="version",
-        name="Version",
-        icon="mdi:tag",
+        translation_key="version",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda instance: instance.version or None,
     ),
     PrintHandySensorEntityDescription(
         key="doctor_failures",
-        name="Doctor failures",
-        icon="mdi:stethoscope",
+        translation_key="doctor_failures",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda instance: instance.doctor_failures,
     ),
@@ -90,6 +97,28 @@ def _finish_time(status: PrinterStatus) -> datetime | None:
     if status.remaining_min is None:
         return None
     return datetime.now(UTC) + timedelta(minutes=status.remaining_min)
+
+
+def stable_finish(
+    previous: datetime | None,
+    status: PrinterStatus,
+    *,
+    now: datetime | None = None,
+    tolerance_seconds: int = FINISH_TOLERANCE_SECONDS,
+) -> datetime | None:
+    """Return the projected finish, held steady until it moves by more than the tolerance.
+
+    now + remaining minutes drifts by the poll interval on every poll even
+    when the print is on schedule, which would rewrite the state (and the
+    recorder) every cycle. The previous projection is kept while the new one
+    is within ``tolerance_seconds`` of it.
+    """
+    if status.remaining_min is None:
+        return None
+    projected = (now or datetime.now(UTC)) + timedelta(minutes=status.remaining_min)
+    if previous is not None and abs((projected - previous).total_seconds()) <= tolerance_seconds:
+        return previous
+    return projected
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -111,29 +140,26 @@ class PrintHandyPrinterSensorEntityDescription(SensorEntityDescription):
 PRINTER_SENSORS: tuple[PrintHandyPrinterSensorEntityDescription, ...] = (
     PrintHandyPrinterSensorEntityDescription(
         key="current_state",
-        name="Current state",
-        icon="mdi:printer-3d",
+        translation_key="current_state",
         device_class=SensorDeviceClass.ENUM,
         options=PRINT_STATES,
         value_fn=lambda status: status.state if status.state in PRINT_STATES else "unknown",
     ),
     PrintHandyPrinterSensorEntityDescription(
         key="print_progress",
-        name="Print progress",
-        icon="mdi:progress-clock",
+        translation_key="print_progress",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=_percent,
     ),
     PrintHandyPrinterSensorEntityDescription(
         key="filename",
-        name="Filename",
-        icon="mdi:file",
+        translation_key="filename",
         value_fn=lambda status: status.filename or None,
     ),
     PrintHandyPrinterSensorEntityDescription(
         key="nozzle_temperature",
-        name="Nozzle temperature",
+        translation_key="nozzle_temperature",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
@@ -141,7 +167,7 @@ PRINTER_SENSORS: tuple[PrintHandyPrinterSensorEntityDescription, ...] = (
     ),
     PrintHandyPrinterSensorEntityDescription(
         key="bed_temperature",
-        name="Bed temperature",
+        translation_key="bed_temperature",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
@@ -149,7 +175,7 @@ PRINTER_SENSORS: tuple[PrintHandyPrinterSensorEntityDescription, ...] = (
     ),
     PrintHandyPrinterSensorEntityDescription(
         key="nozzle_target_temperature",
-        name="Nozzle target temperature",
+        translation_key="nozzle_target_temperature",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
@@ -158,7 +184,7 @@ PRINTER_SENSORS: tuple[PrintHandyPrinterSensorEntityDescription, ...] = (
     ),
     PrintHandyPrinterSensorEntityDescription(
         key="bed_target_temperature",
-        name="Bed target temperature",
+        translation_key="bed_target_temperature",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
@@ -167,14 +193,14 @@ PRINTER_SENSORS: tuple[PrintHandyPrinterSensorEntityDescription, ...] = (
     ),
     PrintHandyPrinterSensorEntityDescription(
         key="estimated_finish_time",
-        name="Estimated finish time",
+        translation_key="estimated_finish_time",
         device_class=SensorDeviceClass.TIMESTAMP,
         value_fn=_finish_time,
         present_fn=lambda status: status.remaining_min is not None,
     ),
     PrintHandyPrinterSensorEntityDescription(
         key="time_remaining",
-        name="Time remaining",
+        translation_key="time_remaining",
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.MINUTES,
         state_class=SensorStateClass.MEASUREMENT,
@@ -183,52 +209,54 @@ PRINTER_SENSORS: tuple[PrintHandyPrinterSensorEntityDescription, ...] = (
     ),
     PrintHandyPrinterSensorEntityDescription(
         key="current_layer",
-        name="Current layer",
-        icon="mdi:layers",
+        translation_key="current_layer",
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda status: status.layer,
         present_fn=lambda status: status.layer is not None,
     ),
     PrintHandyPrinterSensorEntityDescription(
         key="total_layers",
-        name="Total layers",
-        icon="mdi:layers-triple",
+        translation_key="total_layers",
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda status: status.total_layers,
         present_fn=lambda status: status.total_layers is not None,
     ),
     # Issue-#1 remainder (0.5.0): gated on object data like the
-    # targets, but checked on every poll, not just the first (see
-    # async_setup_entry) — object data only exists while a print
+    # targets, but checked on every update, not just the first: object
+    # data only exists while a print
     # runs, so a printer whose Print Handy reports no objects (or a
     # build that predates the object fields) gains no dead sensor,
     # and one that starts a print later gains the sensor then.
     PrintHandyPrinterSensorEntityDescription(
         key="current_object",
-        name="Current object",
-        icon="mdi:cube-outline",
+        translation_key="current_object",
         value_fn=lambda status: status.current_object,
         present_fn=lambda status: bool(status.objects or status.current_object),
     ),
 )
-
-CURRENT_OBJECT_DESCRIPTION = next(
-    description for description in PRINTER_SENSORS if description.key == "current_object"
-)
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: PrintHandyConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Print Handy sensors from a config entry."""
+    """Set up Print Handy sensors from a config entry.
+
+    Entities gated on data a printer only sometimes reports (targets,
+    layers, remaining time, objects, an AMS, spools) are added the first
+    time an update carries that data, not just at setup, so a printer that
+    was offline at startup, a print that starts later or a printer added to
+    the roster gains them without a reload.
+    """
     coordinator: PrintHandyDataUpdateCoordinator = entry.runtime_data
-    entities: list[SensorEntity] = [
-        PrintHandyInstanceSensor(coordinator, entry, description)
-        for description in INSTANCE_SENSORS
-    ]
-    if coordinator.data is not None:
+
+    def build() -> list[SensorEntity]:
+        entities: list[SensorEntity] = [
+            PrintHandyInstanceSensor(coordinator, entry, description)
+            for description in INSTANCE_SENSORS
+        ]
+        if coordinator.data is None:
+            return entities
         for printer in coordinator.data.printers:
             entities.append(
                 PrintHandyPrinterConnectionSensor(coordinator, entry, printer)
@@ -245,11 +273,11 @@ async def async_setup_entry(
                 entities.append(
                     PrintHandyPrinterFilamentSensor(coordinator, entry, printer)
                 )
-            # One spool sensor per slot (#789), created only when the
-            # first poll actually carries a spools view for this
-            # printer — a Print Handy without the spools endpoint (or
-            # with Spoolman unreachable there) yields the unavailable
-            # view and gains no dead slot entities.
+            # One spool sensor per slot (#789), created once the poll
+            # carries a spools view for this printer - a Print Handy
+            # without the spools endpoint (or with Spoolman unreachable
+            # there) yields the unavailable view and gains no dead slot
+            # entities.
             view = coordinator.data.spool_view(printer.printer_id)
             if view is not None and view.available:
                 entities.extend(
@@ -258,48 +286,16 @@ async def async_setup_entry(
                     )
                     for row in view.slots
                 )
-    async_add_entities(entities)
+        return entities
 
-    # The current-object sensor is the one gated entity whose data
-    # is not a standing printer property: objects exist only while a
-    # print runs, so a printer idle at setup would never gain the
-    # sensor under first-poll gating alone (Codex review, PR #8).
-    # Watch every poll instead and add it the first time a printer's
-    # status actually carries object data; printers that never
-    # report objects still gain no dead sensor.
-    added_current_object: set[str] = set()
-    if coordinator.data is not None:
-        for printer in coordinator.data.printers:
-            status = coordinator.data.status(printer.printer_id)
-            if status is not None and CURRENT_OBJECT_DESCRIPTION.present_fn(status):
-                added_current_object.add(printer.printer_id)
-
-    def _add_current_object_when_ready() -> None:
-        if coordinator.data is None:
-            return
-        new_entities: list[SensorEntity] = []
-        for printer in coordinator.data.printers:
-            if printer.printer_id in added_current_object:
-                continue
-            status = coordinator.data.status(printer.printer_id)
-            if status is None or not CURRENT_OBJECT_DESCRIPTION.present_fn(status):
-                continue
-            added_current_object.add(printer.printer_id)
-            new_entities.append(
-                PrintHandyPrinterStatusSensor(
-                    coordinator, entry, printer, CURRENT_OBJECT_DESCRIPTION
-                )
-            )
-        if new_entities:
-            async_add_entities(new_entities)
-
-    entry.async_on_unload(coordinator.async_add_listener(_add_current_object_when_ready))
+    async_add_entities_as_known(coordinator, entry, async_add_entities, build)
 
 
 class PrintHandyPrinterStatusSensor(PrintHandyPrinterEntity, SensorEntity):
     """One sensor reading a field of this printer's live status."""
 
     entity_description: PrintHandyPrinterSensorEntityDescription
+    _requires_live_status = True
 
     def __init__(
         self,
@@ -311,9 +307,10 @@ class PrintHandyPrinterStatusSensor(PrintHandyPrinterEntity, SensorEntity):
         """Initialize."""
         super().__init__(coordinator, entry, printer)
         self.entity_description = description
-        self._attr_unique_id = (
-            f"{coordinator.client.base_url}:printer:{printer.printer_id}:{description.key}"
+        self._attr_unique_id = printer_unique_id(
+            coordinator, printer.printer_id, description.key
         )
+        self._finish: datetime | None = None
 
     @property
     def native_value(self) -> Any:
@@ -321,6 +318,9 @@ class PrintHandyPrinterStatusSensor(PrintHandyPrinterEntity, SensorEntity):
         status = self.status
         if status is None:
             return None
+        if self.entity_description.key == "estimated_finish_time":
+            self._finish = stable_finish(self._finish, status)
+            return self._finish
         return self.entity_description.value_fn(status)
 
     @property
@@ -343,6 +343,8 @@ class PrintHandyPrinterStatusSensor(PrintHandyPrinterEntity, SensorEntity):
         if self.entity_description.key != "current_state":
             return {}
         attrs: dict[str, Any] = {"filename": status.filename}
+        if status.state not in PRINT_STATES:
+            attrs["raw_state"] = status.state
         if status.detail:
             attrs["detail"] = status.detail
         return attrs
@@ -359,6 +361,9 @@ class PrintHandyPrinterFilamentSensor(PrintHandyPrinterEntity, SensorEntity):
     weight or Spoolman id is claimed here.
     """
 
+    _attr_translation_key = "filament"
+    _requires_live_status = True
+
     def __init__(
         self,
         coordinator: PrintHandyDataUpdateCoordinator,
@@ -367,9 +372,9 @@ class PrintHandyPrinterFilamentSensor(PrintHandyPrinterEntity, SensorEntity):
     ) -> None:
         """Initialize."""
         super().__init__(coordinator, entry, printer)
-        self._attr_name = "Filament"
-        self._attr_icon = "mdi:printer-3d-nozzle"
-        self._attr_unique_id = f"{coordinator.client.base_url}:printer:{printer.printer_id}:filament"
+        self._attr_unique_id = printer_unique_id(
+            coordinator, printer.printer_id, "filament"
+        )
 
     @property
     def native_value(self) -> str | None:
@@ -440,11 +445,10 @@ class PrintHandyPrinterSlotSpoolSensor(PrintHandyPrinterEntity, SensorEntity):
         """Initialize."""
         super().__init__(coordinator, entry, printer)
         self._slot = slot
-        self._attr_name = f"Slot {slot} spool"
-        self._attr_icon = "mdi:tray-full"
-        self._attr_unique_id = (
-            f"{coordinator.client.base_url}:printer:{printer.printer_id}"
-            f":slot_{slot}_spool"
+        self._attr_translation_key = "slot_spool"
+        self._attr_translation_placeholders = {"slot": str(slot)}
+        self._attr_unique_id = printer_unique_id(
+            coordinator, printer.printer_id, f"slot_{slot}_spool"
         )
 
     @property
@@ -493,9 +497,7 @@ class PrintHandyInstanceSensor(PrintHandyEntity, SensorEntity):
         """Initialize."""
         super().__init__(coordinator, entry)
         self.entity_description = description
-        self._attr_unique_id = (
-            f"{coordinator.client.base_url}:instance:{description.key}"
-        )
+        self._attr_unique_id = instance_unique_id(coordinator, description.key)
 
     @property
     def native_value(self) -> str | int | None:
@@ -508,6 +510,9 @@ class PrintHandyInstanceSensor(PrintHandyEntity, SensorEntity):
 class PrintHandyPrinterConnectionSensor(PrintHandyPrinterEntity, SensorEntity):
     """Diagnostic sensor: how Print Handy reaches this printer."""
 
+    _attr_translation_key = "connection"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
     def __init__(
         self,
         coordinator: PrintHandyDataUpdateCoordinator,
@@ -516,10 +521,9 @@ class PrintHandyPrinterConnectionSensor(PrintHandyPrinterEntity, SensorEntity):
     ) -> None:
         """Initialize."""
         super().__init__(coordinator, entry, printer)
-        self._attr_name = "Connection"
-        self._attr_icon = "mdi:connection"
-        self._attr_entity_category = EntityCategory.DIAGNOSTIC
-        self._attr_unique_id = f"{coordinator.client.base_url}:printer:{printer.printer_id}:connection"
+        self._attr_unique_id = printer_unique_id(
+            coordinator, printer.printer_id, "connection"
+        )
 
     @property
     def native_value(self) -> str | None:

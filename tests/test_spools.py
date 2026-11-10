@@ -29,6 +29,8 @@ from tests.test_spool_model import SPOOLS_BODY  # noqa: E402
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry  # noqa: E402
 
+_CLOCK = "custom_components.print_handy.coordinator._monotonic"
+
 SNAPSHOT_BODY = {
     "version": "2.2.2",
     "host": "print-handy-box",
@@ -186,7 +188,9 @@ async def test_slot_sensors_update_after_a_poll_cycle(hass: HomeAssistant):
             ],
         }
         FakeApiClient.spools_body = changed
-        await entry.runtime_data.async_refresh()
+        # Spools are on their own slow cadence: let it come due.
+        with patch(_CLOCK, return_value=10_000_000.0):
+            await entry.runtime_data.async_refresh()
         await hass.async_block_till_done()
         slot1 = _slot_state(hass, 1)
         assert slot1.state == "Coffee PLA+"
@@ -316,8 +320,9 @@ async def test_slot_sensors_go_unavailable_when_the_spool_poll_fails(
                 for printer_id in printer_ids
             }
 
-        with patch.object(
-            FakeApiClient, "async_get_printer_spool_views", _down
+        with (
+            patch.object(FakeApiClient, "async_get_printer_spool_views", _down),
+            patch(_CLOCK, return_value=10_000_000.0),
         ):
             await entry.runtime_data.async_refresh()
             await hass.async_block_till_done()

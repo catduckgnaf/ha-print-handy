@@ -1,43 +1,66 @@
 {
   "config": {
     "abort": {
-      "already_configured": "This Print Handy instance is already configured",
-      "reauth_successful": "The Print Handy access token was updated"
+      "already_configured": "This Print Handy Web UI is already configured",
+      "reauth_successful": "Reconnected to Print Handy",
+      "reconfigure_successful": "The Print Handy connection was updated"
     },
     "error": {
-      "cannot_connect": "Could not reach the Print Handy Web UI. Check the URL and that the Web UI is enabled.",
-      "invalid_auth": "The Web UI rejected the access token. Use the value of the WEBUI_ACCESS_TOKEN environment variable on the Print Handy side.",
+      "cannot_connect": "Could not reach the Print Handy Web UI. Check the address and that the Web UI is enabled.",
+      "invalid_auth": "The Web UI rejected the credential. Enter the Web UI access token or the Web UI password.",
       "invalid_url": "Enter the Web UI address of your Print Handy instance.",
+      "forbidden_host": "Print Handy refused the request because of the address used. With no Web UI password it only answers by IP address or a local host name (a single word, or ending in .local, .lan, .home, .internal or .home.arpa). Use the server's IP address, or set a Web UI password in Print Handy and enter it as the token.",
+      "rate_limited": "Print Handy is temporarily rejecting requests from Home Assistant after failed attempts. Wait a minute and try again.",
+      "server_error": "Print Handy answered with a server error. Check its logs and try again.",
+      "url_in_use": "Another Print Handy entry already uses this address.",
       "unknown": "Print Handy answered, but not with a usable status snapshot."
     },
     "step": {
-      "reauth_confirm": {
-        "data": {
-          "token": "Web UI access token"
-        },
-        "description": "The stored token no longer works. Enter the current Web UI access token for {url}.",
-        "title": "Reconnect Print Handy"
-      },
       "user": {
+        "title": "Connect to Print Handy",
+        "description": "Connect to the Print Handy instance that manages your printers. Its Web UI must be enabled. Example address: {example_url}",
         "data": {
-          "token": "Web UI access token (optional on loopback)",
-          "url": "Print Handy Web UI URL"
+          "url": "Print Handy Web UI URL",
+          "token": "Access token or Web UI password (optional)"
         },
         "data_description": {
-          "token": "The value of the WEBUI_ACCESS_TOKEN environment variable on the Print Handy side. Leave empty when the Web UI has no token (loopback installs only)."
+          "url": "Use the server's IP address or a local host name. With no Web UI password set, Print Handy refuses requests that use a public-looking host name.",
+          "token": "Either the Web UI access token (the WEBUI_ACCESS_TOKEN environment variable on the Print Handy side) or the Web UI password. Leave it empty when the Web UI has no password."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reconnect Print Handy",
+        "description": "The stored credential no longer works for {url}. Enter the current Web UI access token or Web UI password. Leave it empty if the Web UI no longer has a password.",
+        "data": {
+          "token": "Access token or Web UI password (optional)"
+        }
+      },
+      "reconfigure": {
+        "title": "Change the Print Handy connection",
+        "description": "Change the address or credential. Entities and history are kept.",
+        "data": {
+          "url": "Print Handy Web UI URL",
+          "token": "Access token or Web UI password (optional)"
         },
-        "description": "Connect to the Print Handy instance that manages your printers. Its Web UI must be enabled. Example address: {example_url}",
-        "title": "Connect to Print Handy"
+        "data_description": {
+          "url": "Use the server's IP address or a local host name.",
+          "token": "Either the Web UI access token or the Web UI password. Leave it empty when the Web UI has no password."
+        }
       }
     }
   },
   "options": {
     "step": {
       "init": {
+        "title": "Print Handy options",
         "data": {
-          "scan_interval": "Polling interval (seconds)"
+          "scan_interval": "Printer polling interval (seconds)",
+          "hub_scan_interval": "Instance status interval (seconds)"
         },
-        "title": "Print Handy options"
+        "data_description": {
+          "scan_interval": "How often each printer's live status is read. Cheap; the default is 30 seconds.",
+          "hub_scan_interval": "How often the printer roster, version and health are read. This makes Print Handy run its full self-check, so keep it slow; the default is 300 seconds."
+        }
       }
     }
   },
@@ -47,8 +70,8 @@
       "description": "Assign a spool to a slot on one printer. A spool already in the slot goes back on the shelf.",
       "fields": {
         "printer_id": {
-          "name": "Printer",
-          "description": "The Print Handy printer id, exactly as Print Handy names it."
+          "name": "Printer id",
+          "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
         },
         "slot": {
           "name": "Slot",
@@ -65,8 +88,8 @@
       "description": "Swap the spools in two slots on one printer.",
       "fields": {
         "printer_id": {
-          "name": "Printer",
-          "description": "The Print Handy printer id, exactly as Print Handy names it."
+          "name": "Printer id",
+          "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
         },
         "slot_a": {
           "name": "First slot",
@@ -83,8 +106,8 @@
       "description": "Unassign a slot on one printer. The spool goes back on the shelf.",
       "fields": {
         "printer_id": {
-          "name": "Printer",
-          "description": "The Print Handy printer id, exactly as Print Handy names it."
+          "name": "Printer id",
+          "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
         },
         "slot": {
           "name": "Slot",
@@ -97,8 +120,8 @@
       "description": "Create a new spool on the shelf for one printer.",
       "fields": {
         "printer_id": {
-          "name": "Printer",
-          "description": "The Print Handy printer id, exactly as Print Handy names it."
+          "name": "Printer id",
+          "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
         },
         "material": {
           "name": "Material",
@@ -127,18 +150,18 @@
       "description": "Reconcile one printer's slot state with Spoolman.",
       "fields": {
         "printer_id": {
-          "name": "Printer",
-          "description": "The Print Handy printer id, exactly as Print Handy names it."
+          "name": "Printer id",
+          "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
         }
       }
     },
     "send_gcode": {
       "name": "Send G-code",
-      "description": "Send a G-code script to one printer, through Print Handy's control API.",
+      "description": "Send a G-code script to one printer through Print Handy's control API. The script is passed to the printer as given: it can start a print or move the machine, so restrict who can call this service.",
       "fields": {
         "printer_id": {
-          "name": "Printer",
-          "description": "The Print Handy printer id, exactly as Print Handy names it."
+          "name": "Printer id",
+          "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
         },
         "script": {
           "name": "Script",
@@ -148,16 +171,128 @@
     },
     "exclude_object": {
       "name": "Exclude object",
-      "description": "Exclude one object from the print running on one printer, by object name.",
+      "description": "Exclude one object from the print running on a Moonraker printer, by object name.",
       "fields": {
         "printer_id": {
-          "name": "Printer",
-          "description": "The Print Handy printer id, exactly as Print Handy names it."
+          "name": "Printer id",
+          "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
         },
         "object": {
           "name": "Object",
           "description": "Name of the object to exclude, exactly as the Current object sensor lists it."
         }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Status"
+      },
+      "version": {
+        "name": "Version"
+      },
+      "doctor_failures": {
+        "name": "Doctor failures"
+      },
+      "current_state": {
+        "name": "Current state",
+        "state": {
+          "standby": "Standby",
+          "printing": "Printing",
+          "paused": "Paused",
+          "complete": "Complete",
+          "error": "Error",
+          "cancelled": "Cancelled",
+          "unknown": "Unknown"
+        }
+      },
+      "print_progress": {
+        "name": "Print progress"
+      },
+      "filename": {
+        "name": "Filename"
+      },
+      "nozzle_temperature": {
+        "name": "Nozzle temperature"
+      },
+      "bed_temperature": {
+        "name": "Bed temperature"
+      },
+      "nozzle_target_temperature": {
+        "name": "Nozzle target temperature"
+      },
+      "bed_target_temperature": {
+        "name": "Bed target temperature"
+      },
+      "estimated_finish_time": {
+        "name": "Estimated finish time"
+      },
+      "time_remaining": {
+        "name": "Time remaining"
+      },
+      "current_layer": {
+        "name": "Current layer"
+      },
+      "total_layers": {
+        "name": "Total layers"
+      },
+      "current_object": {
+        "name": "Current object"
+      },
+      "filament": {
+        "name": "Filament"
+      },
+      "slot_spool": {
+        "name": "Slot {slot} spool"
+      },
+      "connection": {
+        "name": "Connection"
+      }
+    },
+    "binary_sensor": {
+      "bot_connected": {
+        "name": "Bot connected"
+      },
+      "spoolman_connected": {
+        "name": "Spoolman connected"
+      },
+      "online": {
+        "name": "Online"
+      },
+      "printing": {
+        "name": "Printing"
+      },
+      "printing_error": {
+        "name": "Printing error"
+      }
+    },
+    "button": {
+      "pause": {
+        "name": "Pause"
+      },
+      "resume": {
+        "name": "Resume"
+      },
+      "cancel": {
+        "name": "Cancel"
+      },
+      "emergency_stop": {
+        "name": "Emergency stop"
+      },
+      "firmware_restart": {
+        "name": "Firmware restart"
+      },
+      "server_restart": {
+        "name": "Moonraker restart"
+      }
+    },
+    "number": {
+      "nozzle_target_temperature": {
+        "name": "Nozzle target temperature"
+      },
+      "bed_target_temperature": {
+        "name": "Bed target temperature"
       }
     }
   }

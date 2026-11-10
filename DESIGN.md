@@ -104,7 +104,7 @@ surface that exists. MQTT is supported *alongside* as a user-side option
 automations); this integration does not depend on it, because its payloads
 carry no state and are not retained.
 
-Polling cadence: 30 s default, user-adjustable (10–3600 s) in options.
+Polling cadence (0.6.0): per-printer status 30 s default (10–3600 s), the instance /api/status 300 s default (60–3600 s) because it runs the server self-check, spools every 120 s and after a spool service call.
 The Moonraker integration's dual-rate pattern (fast while printing, slow
 while idle) remains a planned refinement — 0.2.0 keeps the single
 configured interval for snapshot and per-printer polls alike.
