@@ -69,6 +69,10 @@
       "name": "Assign spool",
       "description": "Assign a spool to a slot on one printer. A spool already in the slot goes back on the shelf.",
       "fields": {
+        "device_id": {
+          "name": "Printer device",
+          "description": "Pick the printer's device instead of typing its id. Several devices run the service on each."
+        },
         "printer_id": {
           "name": "Printer id",
           "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
@@ -87,6 +91,10 @@
       "name": "Swap spools",
       "description": "Swap the spools in two slots on one printer.",
       "fields": {
+        "device_id": {
+          "name": "Printer device",
+          "description": "Pick the printer's device instead of typing its id. Several devices run the service on each."
+        },
         "printer_id": {
           "name": "Printer id",
           "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
@@ -105,6 +113,10 @@
       "name": "Unassign spool",
       "description": "Unassign a slot on one printer. The spool goes back on the shelf.",
       "fields": {
+        "device_id": {
+          "name": "Printer device",
+          "description": "Pick the printer's device instead of typing its id. Several devices run the service on each."
+        },
         "printer_id": {
           "name": "Printer id",
           "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
@@ -119,6 +131,10 @@
       "name": "Add spool",
       "description": "Create a new spool on the shelf for one printer.",
       "fields": {
+        "device_id": {
+          "name": "Printer device",
+          "description": "Pick the printer's device instead of typing its id. Several devices run the service on each."
+        },
         "printer_id": {
           "name": "Printer id",
           "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
@@ -149,6 +165,10 @@
       "name": "Sync spools",
       "description": "Reconcile one printer's slot state with Spoolman.",
       "fields": {
+        "device_id": {
+          "name": "Printer device",
+          "description": "Pick the printer's device instead of typing its id. Several devices run the service on each."
+        },
         "printer_id": {
           "name": "Printer id",
           "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
@@ -159,6 +179,10 @@
       "name": "Send G-code",
       "description": "Send a G-code script to one printer through Print Handy's control API. The script is passed to the printer as given: it can start a print or move the machine, so restrict who can call this service.",
       "fields": {
+        "device_id": {
+          "name": "Printer device",
+          "description": "Pick the printer's device instead of typing its id. Several devices run the service on each."
+        },
         "printer_id": {
           "name": "Printer id",
           "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
@@ -173,6 +197,10 @@
       "name": "Exclude object",
       "description": "Exclude one object from the print running on a Moonraker printer, by object name.",
       "fields": {
+        "device_id": {
+          "name": "Printer device",
+          "description": "Pick the printer's device instead of typing its id. Several devices run the service on each."
+        },
         "printer_id": {
           "name": "Printer id",
           "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
