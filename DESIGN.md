@@ -187,7 +187,7 @@ endpoint genuinely sends (named here, not silently dropped):
   carries a snapshot URL") is not wired: the 0.1.0 model does not parse
   a camera field from the roster, and camera support was outside the
   0.2.0 scope. Revisit with the thumbnail work.
-  *(0.7.0 update, issue #14: the conditional is now wired — the model
+  *(0.6.1 update, issue #14: the conditional is now wired — the model
   parses `camera_snapshot_url` from the roster and a camera entity is
   created for those printers, fetching stills through the server's
   snapshot proxy (#708) rather than from the URL directly. The
