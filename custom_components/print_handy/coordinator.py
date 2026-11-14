@@ -33,7 +33,7 @@ from .const import (
     EVENT_PRINT_FINISHED,
     HUB_RETRY_INTERVAL,
 )
-from .model import PrinterSpools, Snapshot
+from .model import PrinterSpools, Snapshot, merge_roster
 
 LOGGER = logging.getLogger(__name__)
 
@@ -58,7 +58,12 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
     last good copy is reused between fetches. Each roster printer's live
     status from ``/api/printers/<id>/status`` is cheap and is read on every
     tick. The spools views (a Spoolman read per printer) are read on their
-    own slow interval and right after a spool service call.
+    own slow interval and right after a spool service call. On the ticks
+    between full status reads, the cheap roster (``GET /api/printers``,
+    Print Handy #1400: configuration only) refreshes the printer list and
+    its control facts, so one tick makes at most one roster-or-status
+    request plus one status request per printer. A server too old for
+    that endpoint answers 404 once and is not asked again until reload.
 
     A failed hub refresh never fails the update while the per-printer
     reads succeed: the previous roster stays, ``hub_error`` records why and
@@ -87,6 +92,9 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
         self._spools_fetched: float | None = None
         self._force_spools = False
         self._backoff_until = 0.0
+        # None until the first roster request says whether the server has it.
+        self.roster_supported: bool | None = None
+        self._hub_requested = False
         super().__init__(
             hass,
             LOGGER,
@@ -111,6 +119,8 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
             )
         try:
             hub = await self._async_hub(now)
+            if not self._hub_requested:
+                hub = await self._async_roster(hub)
             printer_ids = [printer.printer_id for printer in hub.printers]
             statuses = await self.client.async_get_printer_statuses(printer_ids)
             spools = await self._async_spools(now, printer_ids)
@@ -171,6 +181,7 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
             or self._hub_fetched is None
             or now - self._hub_fetched >= self.hub_interval
         )
+        self._hub_requested = due
         if not due:
             return previous
         try:
@@ -198,6 +209,37 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
         self.hub_error = None
         self._hub_fetched = now
         return snapshot
+
+    async def _async_roster(self, hub: Snapshot) -> Snapshot:
+        """Overlay the cheap roster on the reused hub snapshot, when the server has it.
+
+        A failed roster read is not worth failing the tick for: the last
+        roster stays. Auth, rate-limit and refused-host errors propagate
+        like everywhere else.
+        """
+        if self.roster_supported is False:
+            return hub
+        try:
+            roster = await self.client.async_get_roster()
+        except (
+            PrintHandyAuthError,
+            PrintHandyRateLimitedError,
+            PrintHandyHostRefusedError,
+        ):
+            raise
+        except PrintHandyApiError as err:
+            LOGGER.debug("Print Handy roster read failed, keeping the last one: %s", err)
+            return hub
+        if roster is None:
+            self.roster_supported = False
+            LOGGER.debug(
+                "Print Handy at %s has no cheap roster endpoint; "
+                "the full status read stays the roster",
+                self.client.base_url,
+            )
+            return hub
+        self.roster_supported = True
+        return merge_roster(hub, roster)
 
     async def _async_spools(
         self, now: float, printer_ids: list[str]

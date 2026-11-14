@@ -104,7 +104,7 @@ surface that exists. MQTT is supported *alongside* as a user-side option
 automations); this integration does not depend on it, because its payloads
 carry no state and are not retained.
 
-Polling cadence (0.6.0): per-printer status 30 s default (10–3600 s), the instance /api/status 300 s default (60–3600 s) because it runs the server self-check, spools every 120 s and after a spool service call.
+Polling cadence (0.6.0): per-printer status 30 s default (10–3600 s), the instance /api/status 300 s default (60–3600 s) because it runs the server self-check, spools every 120 s and after a spool service call. 0.6.2 adds the cheap roster (`GET /api/printers`) on the ticks between full reads (§3.6).
 The Moonraker integration's dual-rate pattern (fast while printing, slow
 while idle) remains a planned refinement — 0.2.0 keeps the single
 configured interval for snapshot and per-printer polls alike.
@@ -362,6 +362,37 @@ Design choices, recorded:
   printer; printers that never report objects still gain none. (The
   other gated entities read standing printer properties — targets,
   layers, remaining time — and keep first-poll gating.)
+
+### 3.6 Shipped in 0.6.2 (issue #14 server-side items, Print Handy #1400)
+
+The four items issue #14 left blocked on the server, built against the
+fields Print Handy #1400 added. Every one degrades to the 0.6.1
+behavior against a server that does not send it.
+
+- **Cheap roster.** `GET /api/printers` returns `{ok, version,
+  instance_id, controls_enabled, printers[]}` from configuration only
+  (no doctor, no probe, no printer contact). The coordinator reads it on
+  the ticks between full `/api/status` reads and lays it over the last
+  full snapshot (`model.merge_roster`): the roster decides which printers
+  exist and their control facts; listener health and instance health stay
+  as the full read measured them. A 404 (or a body that is not a roster)
+  marks the server as not having it, and it is not asked again until
+  reload. One tick: at most one roster-or-status request plus one status
+  request per printer.
+- **Server instance id.** Stored on the entry as `server_id` and used as
+  the entry's unique id (adopted at setup for older entries unless another
+  entry already claims it), so the user flow recognizes the same server
+  under a new address and updates that entry, and Reconfigure refuses
+  (`wrong_server`) an address that answers as a different server. Entity
+  and device ids stay on the per-entry `instance_id` from 0.6.0; nothing
+  is renamed.
+- **Controls flag.** Per roster row, `controls_enabled`. Buttons and
+  target numbers are unavailable while it is `false`; `null` or absent
+  (older servers) keeps them available, with refusals failing visibly as
+  before. Services are not gated: they surface the server's refusal.
+- **Temperature ceilings.** Per roster row, `temperature_limits_c`
+  (`nozzle`, `bed`, `chamber`, °C). The target numbers take their maximum
+  from it, falling back to 350 / 150 °C.
 
 ## 4. The gap, precisely — closed, except the thumbnail
 

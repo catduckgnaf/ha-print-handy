@@ -19,6 +19,7 @@ from homeassistant.helpers.typing import ConfigType
 from .api import normalize_base_url
 from .const import (
     CONF_INSTANCE_ID,
+    CONF_SERVER_ID,
     DOMAIN,
     ISSUE_URL,
     PLATFORMS,
@@ -271,6 +272,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: PrintHandyConfigEntry) -
     entry.runtime_data = coordinator
 
     await coordinator.async_config_entry_first_refresh()
+    _async_adopt_server_id(hass, entry, coordinator)
     async_ensure_instance_device(coordinator)
 
     @callback
@@ -285,6 +287,49 @@ async def async_setup_entry(hass: HomeAssistant, entry: PrintHandyConfigEntry) -
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
+
+
+@callback
+def _async_adopt_server_id(
+    hass: HomeAssistant,
+    entry: PrintHandyConfigEntry,
+    coordinator: PrintHandyDataUpdateCoordinator,
+) -> None:
+    """Record the server's own instance id (Print Handy #1400) on the entry.
+
+    Entries made before the server sent one carry a random unique id.
+    Once the server names itself, the entry takes that name as its
+    unique id, so adding the same server again under another address
+    is recognized instead of creating a duplicate. Entity and device ids
+    stay on CONF_INSTANCE_ID and do not change. When another entry
+    already claims the id (the same server added twice at different
+    addresses), this entry is left alone and a warning names both.
+    """
+    server_id = coordinator.data.instance.instance_id if coordinator.data else ""
+    if not server_id or entry.data.get(CONF_SERVER_ID) == server_id:
+        return
+    clash = next(
+        (
+            other
+            for other in hass.config_entries.async_entries(DOMAIN)
+            if other.entry_id != entry.entry_id and other.unique_id == server_id
+        ),
+        None,
+    )
+    if clash is not None:
+        LOGGER.warning(
+            "Print Handy entries %s and %s point at the same server (%s); "
+            "remove one of them",
+            clash.title,
+            entry.title,
+            server_id,
+        )
+        return
+    hass.config_entries.async_update_entry(
+        entry,
+        data={**entry.data, CONF_SERVER_ID: server_id},
+        unique_id=server_id,
+    )
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: PrintHandyConfigEntry) -> None:

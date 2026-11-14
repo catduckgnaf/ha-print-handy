@@ -146,6 +146,8 @@ class PrintHandyPrinterButton(PrintHandyPrinterEntity, ButtonEntity):
 
     entity_description: PrintHandyButtonEntityDescription
 
+    _requires_controls = True
+
     def __init__(
         self,
         coordinator: PrintHandyDataUpdateCoordinator,

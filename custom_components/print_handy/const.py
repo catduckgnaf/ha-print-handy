@@ -4,7 +4,7 @@ from homeassistant.const import Platform
 
 NAME = "Print Handy"
 DOMAIN = "print_handy"
-VERSION = "0.6.1"
+VERSION = "0.6.2"
 ATTRIBUTION = "Data provided by Print Handy"
 ISSUE_URL = "https://github.com/catduckgnaf/ha-print-handy/issues"
 
@@ -29,6 +29,10 @@ CONF_HUB_SCAN_INTERVAL = "hub_scan_interval"
 # id for entries migrated from 0.5.x) so changing the URL never changes
 # an entity or device id.
 CONF_INSTANCE_ID = "instance_id"
+# The Print Handy server's own instance id (#1400), when it sends one.
+# Used to recognize the same server under a new address, never to key
+# entities (those stay on CONF_INSTANCE_ID, so nothing is renamed).
+CONF_SERVER_ID = "server_id"
 
 # Cadences. /api/status makes the server run its whole self-diagnosis
 # (it launches the slicer and probes every service), so it is the slow
@@ -47,6 +51,9 @@ FINISH_TOLERANCE_SECONDS = 120
 
 # Print Handy's Web UI status API.
 STATUS_PATH = "/api/status"
+# The cheap roster (Print Handy #1400): configuration only, no doctor
+# run and no printer contact. Older servers answer 404.
+ROSTER_PATH = "/api/printers"
 PRINTER_STATUS_PATH = "/api/printers/{printer_id}/status"
 HEALTHZ_PATH = "/healthz"
 TOKEN_HEADER = "X-WebUI-Token"
@@ -97,6 +104,10 @@ CONFIRM_ACTIONS = ("cancel", "emergency_stop", "firmware_restart", "server_resta
 # Handy answers 501 for every other family, so no button is created.
 MOONRAKER_CONNECTION = "moonraker"
 MOONRAKER_ONLY_ACTIONS = ("emergency_stop", "firmware_restart", "server_restart")
+
+# Fallback UI bounds (°C) for the target-temperature numbers when the
+# server does not send its per-heater ceilings (servers before #1400).
+DEFAULT_HEATER_MAX = {"nozzle": 350.0, "bed": 150.0}
 
 # Print Handy's Web UI spool API (Print Handy #789). The read surface
 # is ``GET /api/printers/<id>/spools``; the write surface is
