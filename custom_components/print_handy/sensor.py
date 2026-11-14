@@ -13,7 +13,7 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import PERCENTAGE, UnitOfTemperature, UnitOfTime
+from homeassistant.const import PERCENTAGE, UnitOfMass, UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -273,6 +273,10 @@ async def async_setup_entry(
                 entities.append(
                     PrintHandyPrinterFilamentSensor(coordinator, entry, printer)
                 )
+            if status.hms_errors is not None or status.print_error_text:
+                entities.append(
+                    PrintHandyPrinterFaultSensor(coordinator, entry, printer)
+                )
             # One spool sensor per slot (#789), created once the poll
             # carries a spools view for this printer - a Print Handy
             # without the spools endpoint (or with Spoolman unreachable
@@ -285,6 +289,14 @@ async def async_setup_entry(
                         coordinator, entry, printer, row.slot
                     )
                     for row in view.slots
+                )
+                entities.extend(
+                    PrintHandyPrinterSlotWeightSensor(
+                        coordinator, entry, printer, row.slot
+                    )
+                    for row in view.slots
+                    if row.spool is not None
+                    and row.spool.remaining_weight is not None
                 )
         return entities
 
@@ -424,6 +436,54 @@ class PrintHandyPrinterFilamentSensor(PrintHandyPrinterEntity, SensorEntity):
         return attrs
 
 
+class PrintHandyPrinterFaultSensor(PrintHandyPrinterEntity, SensorEntity):
+    """Bambu faults (HMS) as a count sensor (issue #14).
+
+    The shape DESIGN.md's card survey prescribes for an error sensor:
+    the state is the fault count and the codes and descriptions ride
+    as attributes, with the printer's own error text alongside. Only
+    printers whose live status carries fault data gain one — the
+    Bambu adapter always sends ``hms_errors``; other families omit
+    the key and the model keeps it None.
+    """
+
+    _attr_translation_key = "faults"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _requires_live_status = True
+
+    def __init__(
+        self,
+        coordinator: PrintHandyDataUpdateCoordinator,
+        entry: PrintHandyConfigEntry,
+        printer: PrinterInfo,
+    ) -> None:
+        """Initialize."""
+        super().__init__(coordinator, entry, printer)
+        self._attr_unique_id = printer_unique_id(
+            coordinator, printer.printer_id, "faults"
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        """The number of active HMS faults; None before the first poll."""
+        status = self.status
+        if status is None or status.hms_errors is None:
+            return None
+        return len(status.hms_errors)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Fault codes, their descriptions, and the printer's error text."""
+        status = self.status
+        if status is None or status.hms_errors is None:
+            return {}
+        return {
+            "codes": [error.code for error in status.hms_errors],
+            "descriptions": [error.description for error in status.hms_errors],
+            "print_error": status.print_error_text or None,
+        }
+
+
 class PrintHandyPrinterSlotSpoolSensor(PrintHandyPrinterEntity, SensorEntity):
     """The spool assigned to one slot of one printer (#789).
 
@@ -481,6 +541,52 @@ class PrintHandyPrinterSlotSpoolSensor(PrintHandyPrinterEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Slot, spool id, material, color and remaining weight."""
         return slot_spool_attributes(self.spool_view, self._slot)
+
+
+class PrintHandyPrinterSlotWeightSensor(PrintHandyPrinterEntity, SensorEntity):
+    """The remaining weight of the spool in one slot, in grams (#14).
+
+    A metric companion to the slot spool sensor (whose state is the
+    spool's name): this one exists so automations and history can use
+    the number itself. Created only for a slot whose spool records a
+    remaining weight; the value is Spoolman's recorded number, never
+    estimated.
+    """
+
+    _attr_device_class = SensorDeviceClass.WEIGHT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfMass.GRAMS
+    _attr_translation_key = "slot_spool_weight"
+
+    def __init__(
+        self,
+        coordinator: PrintHandyDataUpdateCoordinator,
+        entry: PrintHandyConfigEntry,
+        printer: PrinterInfo,
+        slot: int,
+    ) -> None:
+        """Initialize."""
+        super().__init__(coordinator, entry, printer)
+        self._slot = slot
+        self._attr_translation_placeholders = {"slot": str(slot)}
+        self._attr_unique_id = printer_unique_id(
+            coordinator, printer.printer_id, f"slot_{slot}_spool_weight"
+        )
+
+    @property
+    def available(self) -> bool:
+        """Unavailable when the spools poll itself failed for this printer."""
+        view = self.spool_view
+        return super().available and view is not None and view.available
+
+    @property
+    def native_value(self) -> float | None:
+        """The assigned spool's recorded remaining weight, or None."""
+        view = self.spool_view
+        row = view.slot(self._slot) if view is not None else None
+        if row is None or row.spool is None:
+            return None
+        return row.spool.remaining_weight
 
 
 class PrintHandyInstanceSensor(PrintHandyEntity, SensorEntity):

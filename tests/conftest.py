@@ -39,6 +39,7 @@ if importlib.util.find_spec("homeassistant") is None:
 
         BINARY_SENSOR = "binary_sensor"
         BUTTON = "button"
+        CAMERA = "camera"
         NUMBER = "number"
         SENSOR = "sensor"
 

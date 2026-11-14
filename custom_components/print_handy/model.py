@@ -37,8 +37,28 @@ weight is recorded — never estimated.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
+
+
+@dataclass(frozen=True)
+class DoctorCheck:
+    """One doctor row from the snapshot: label, status and detail.
+
+    Status is one of "ok", "skip", "fail", "warn" as the server sends
+    it. Rows ride along per check (not just as failure counts) for the
+    doctor binary sensors and the Repairs issues (issue #14).
+    """
+
+    label: str
+    status: str = "ok"
+    detail: str = ""
+
+    @property
+    def slug(self) -> str:
+        """The label as a stable id fragment ("orca cli" -> "orca_cli")."""
+        return re.sub(r"[^a-z0-9]+", "_", self.label.lower()).strip("_") or "check"
 
 
 @dataclass(frozen=True)
@@ -54,11 +74,21 @@ class PrinterInfo:
     listener_required: bool = False
     listener_ok: bool | None = None
     listener_reason: str = ""
+    # The roster only carries this where a snapshot URL is configured
+    # for the printer; it is the design's condition for a camera
+    # entity (the image itself is fetched through the server's
+    # snapshot proxy, never from this URL directly).
+    camera_snapshot_url: str = ""
 
     @property
     def display_name(self) -> str:
         """Configured name, falling back to the printer id."""
         return self.name or self.printer_id
+
+    @property
+    def has_camera(self) -> bool:
+        """True where the roster carries a camera snapshot URL."""
+        return bool(self.camera_snapshot_url)
 
 
 @dataclass(frozen=True)
@@ -79,6 +109,20 @@ class InstanceInfo:
     spoolman_bundled: bool = False
     doctor_failures: int = 0
     doctor_warnings: int = 0
+    doctor_checks: tuple[DoctorCheck, ...] = ()
+
+
+@dataclass(frozen=True)
+class HmsError:
+    """One decoded Bambu HMS fault from a live status.
+
+    ``description`` is None for a code the server's table does not
+    list; ``listed`` says whether the code is in that table at all.
+    """
+
+    code: str
+    description: str | None = None
+    listed: bool = False
 
 
 @dataclass(frozen=True)
@@ -112,6 +156,12 @@ class PrinterStatus:
     current_object: str | None = None
     objects: tuple[str, ...] = ()
     excluded_objects: tuple[str, ...] = ()
+    # Bambu fault data (issue #14): the Bambu adapter's normalized
+    # status always carries ``hms_errors`` (decoded HMS entries) and
+    # ``print_error_text``; other families omit both keys, so
+    # ``hms_errors`` stays None there and no fault entity is created.
+    hms_errors: tuple[HmsError, ...] | None = None
+    print_error_text: str = ""
 
     @property
     def unavailable(self) -> bool:
@@ -137,6 +187,48 @@ def _names(value: Any) -> tuple[str, ...]:
     if not isinstance(value, list):
         return ()
     return tuple(item for item in value if isinstance(item, str) and item)
+
+
+def _hms_errors(value: Any) -> tuple[HmsError, ...] | None:
+    """Parse the Bambu ``hms_errors`` list; absent key stays None.
+
+    Only Bambu statuses carry the key at all, so its absence is the
+    signal that the family reports no fault data. Junk rows inside a
+    present list are dropped, never guessed at.
+    """
+    if not isinstance(value, list):
+        return None
+    errors: list[HmsError] = []
+    for row in value:
+        if not isinstance(row, dict) or not row.get("code"):
+            continue
+        description = row.get("description")
+        errors.append(
+            HmsError(
+                code=str(row["code"]),
+                description=str(description) if description else None,
+                listed=row.get("listed") is True,
+            )
+        )
+    return tuple(errors)
+
+
+def _doctor_checks(value: Any) -> tuple[DoctorCheck, ...]:
+    """Parse the snapshot's doctor rows, dropping rows without a label."""
+    if not isinstance(value, list):
+        return ()
+    checks: list[DoctorCheck] = []
+    for row in value:
+        if not isinstance(row, dict) or not row.get("label"):
+            continue
+        checks.append(
+            DoctorCheck(
+                label=str(row["label"]),
+                status=str(row.get("status") or "ok"),
+                detail=str(row.get("detail") or ""),
+            )
+        )
+    return tuple(checks)
 
 
 def parse_printer_status(raw: Any, printer_id: str = "") -> PrinterStatus:
@@ -177,6 +269,8 @@ def parse_printer_status(raw: Any, printer_id: str = "") -> PrinterStatus:
         ),
         objects=_names(status.get("objects")),
         excluded_objects=_names(status.get("excluded_objects")),
+        hms_errors=_hms_errors(status.get("hms_errors")),
+        print_error_text=str(status.get("print_error_text") or ""),
     )
 
 
@@ -465,6 +559,7 @@ def parse_snapshot(raw: Any) -> Snapshot:
                 listener_required=_as_bool(row.get("required")),
                 listener_ok=ok if isinstance(ok, bool) else None,
                 listener_reason=str(row.get("reason") or ""),
+                camera_snapshot_url=str(entry.get("camera_snapshot_url") or ""),
             )
         )
 
@@ -483,5 +578,6 @@ def parse_snapshot(raw: Any) -> Snapshot:
         spoolman_bundled=_as_bool(spoolman.get("bundled")),
         doctor_failures=sum(1 for row in doctor if isinstance(row, dict) and row.get("status") == "fail"),
         doctor_warnings=sum(1 for row in doctor if isinstance(row, dict) and row.get("status") == "warn"),
+        doctor_checks=_doctor_checks(doctor),
     )
     return Snapshot(instance=instance, printers=tuple(printers))

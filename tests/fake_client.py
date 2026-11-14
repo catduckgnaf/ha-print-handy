@@ -25,6 +25,9 @@ class World:
 
     rows: list[dict] = field(default_factory=lambda: [MOONRAKER_ROW])
     printers: dict[str, dict] = field(default_factory=dict)
+    doctor: list[dict] | None = None
+    camera_images: dict[str, bytes] = field(default_factory=dict)
+    camera_error: Exception | None = None
     hub_error: Exception | None = None
     status_error: Exception | None = None
     spoolman_ok: bool | None = True
@@ -51,7 +54,16 @@ class FakeClient:
         w.hub_calls += 1
         if w.hub_error is not None:
             raise w.hub_error
-        return parse_snapshot(status_body(*w.rows, spoolman_ok=w.spoolman_ok))
+        return parse_snapshot(
+            status_body(*w.rows, spoolman_ok=w.spoolman_ok, doctor=w.doctor)
+        )
+
+    async def async_get_camera_snapshot(self, printer_id):
+        """Async get camera snapshot."""
+        w = self.world
+        if w.camera_error is not None:
+            raise w.camera_error
+        return w.camera_images[printer_id]
 
     async def async_get_printer_statuses(self, printer_ids):
         """Async get printer statuses."""

@@ -276,6 +276,12 @@
       },
       "connection": {
         "name": "Connection"
+      },
+      "slot_spool_weight": {
+        "name": "Slot {slot} spool weight"
+      },
+      "faults": {
+        "name": "Faults"
       }
     },
     "binary_sensor": {
@@ -293,6 +299,15 @@
       },
       "printing_error": {
         "name": "Printing error"
+      },
+      "ready": {
+        "name": "Ready"
+      },
+      "doctor_check": {
+        "name": "Doctor: {check}"
+      },
+      "low_filament": {
+        "name": "Slot {slot} low filament"
       }
     },
     "button": {
@@ -322,6 +337,17 @@
       "bed_target_temperature": {
         "name": "Bed target temperature"
       }
+    },
+    "camera": {
+      "camera": {
+        "name": "Camera"
+      }
+    }
+  },
+  "issues": {
+    "doctor_check_failed": {
+      "title": "Print Handy doctor check failed: {check}",
+      "description": "The Print Handy doctor check \"{check}\" is failing: {detail}. Open Print Handy's Web UI status page for the full doctor report. This issue clears itself when the check passes again."
     }
   }
 }
