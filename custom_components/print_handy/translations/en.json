@@ -281,6 +281,9 @@
       "slot_spool_weight": {
         "name": "Slot {slot} spool weight"
       },
+      "shelf": {
+        "name": "Spool shelf"
+      },
       "faults": {
         "name": "Faults"
       }

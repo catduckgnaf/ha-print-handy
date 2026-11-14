@@ -25,6 +25,8 @@ TO_REDACT = {
     "spoolman_url",
     "detail",
     "listener_reason",
+    # The chat account the bot signs in as.
+    "bot_user",
     "unique_id",
     "title",
 }

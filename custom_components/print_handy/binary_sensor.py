@@ -24,7 +24,7 @@ from .entity import (
     instance_unique_id,
     printer_unique_id,
 )
-from .model import DoctorCheck, PrinterInfo
+from .model import DoctorCheck, PrinterInfo, bot_attributes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ class PrintHandyBinarySensorEntityDescription(BinarySensorEntityDescription):
     """Class describing Print Handy instance binary sensors."""
 
     value_fn: Any = None  # Callable[[InstanceInfo], bool | None]
+    attrs_fn: Any = None  # Callable[[InstanceInfo], dict[str, Any]] | None
 
 
 INSTANCE_BINARY_SENSORS: tuple[PrintHandyBinarySensorEntityDescription, ...] = (
@@ -47,6 +48,9 @@ INSTANCE_BINARY_SENSORS: tuple[PrintHandyBinarySensorEntityDescription, ...] = (
         translation_key="bot_connected",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
         value_fn=lambda instance: instance.bot_connected,
+        # Which chat platform the bot runs on and the account it is
+        # signed in as, from the snapshot's bot section and heartbeat.
+        attrs_fn=bot_attributes,
     ),
     PrintHandyBinarySensorEntityDescription(
         key="spoolman_connected",
@@ -128,6 +132,13 @@ class PrintHandyInstanceBinarySensor(PrintHandyEntity, BinarySensorEntity):
         if self.coordinator.data is None:
             return None
         return self.entity_description.value_fn(self.coordinator.data.instance)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Attributes for descriptions that define them, else none."""
+        if self.entity_description.attrs_fn is None or self.coordinator.data is None:
+            return None
+        return self.entity_description.attrs_fn(self.coordinator.data.instance)
 
 
 class PrintHandyDoctorCheckBinarySensor(PrintHandyEntity, BinarySensorEntity):

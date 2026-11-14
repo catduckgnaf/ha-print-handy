@@ -236,7 +236,13 @@ class PrintHandyApiClient:
                 request = getattr(self._session, method)
                 kwargs: dict[str, Any] = {"headers": self._headers()}
                 if method == "post":
-                    kwargs["json"] = json_body
+                    # Every Print Handy POST must be application/json, even
+                    # one that takes no fields: the control and spool routes
+                    # check the Content-Type before reading the body and
+                    # answer 415 otherwise. aiohttp sends no body and no
+                    # Content-Type for json=None, so a bodiless action goes
+                    # out as {} (the server reads an empty body as {} too).
+                    kwargs["json"] = {} if json_body is None else json_body
                 async with request(url, **kwargs) as response:
                     if response.status == 401:
                         raise PrintHandyAuthError(
@@ -514,7 +520,8 @@ class PrintHandyApiClient:
         path = path_template.format(printer_id=quote(printer_id, safe=""))
         # Print Handy refuses the CONFIRM_ACTIONS (400) without an
         # explicit confirm; the button press is that confirmation.
-        # Pause and resume take no body.
+        # Pause and resume take no fields; they go out as {} (see
+        # _async_request_json).
         body = {"confirm": True} if action in CONFIRM_ACTIONS else None
         await self._async_post_control(
             f"{self.base_url}{path}",
@@ -739,6 +746,8 @@ class PrintHandyApiClient:
     async def async_sync_spools(self, printer_id: str) -> dict[str, Any]:
         """POST sync: reconcile one printer's slot state with Spoolman.
 
-        The API's sync action takes no body.
+        The API's sync action takes no fields, but the route still
+        requires a JSON body (it answers 415 without one), so it is
+        sent ``{}``.
         """
-        return await self._async_post_spool(printer_id, "sync", None)
+        return await self._async_post_spool(printer_id, "sync", {})

@@ -108,6 +108,9 @@ class InstanceInfo:
     bot_platform: str = ""
     bot_mode: str = ""
     bot_connected: bool | None = None
+    # The chat account the bot is signed in as, from its heartbeat
+    # (``bot.heartbeat.user``); empty while no heartbeat names one.
+    bot_user: str = ""
     # None when Spoolman is not configured (the server sends null): that is
     # not the same as a configured Spoolman that is down (False).
     spoolman_ok: bool | None = None
@@ -506,6 +509,71 @@ def slot_spool_attributes(view: PrinterSpools | None, slot: int) -> dict[str, An
     return attrs
 
 
+# State attributes over 16 KB are not recorded by Home Assistant; one
+# shelf row is a few hundred bytes, so the list stops well short of that.
+SHELF_ATTRIBUTE_LIMIT = 40
+
+
+def _shelf_row(spool: SpoolSummary) -> dict[str, Any]:
+    return {
+        "id": spool.spool_id,
+        "name": spool.name or None,
+        "material": spool.material or None,
+        "color": spool.color or None,
+        "color_hex": spool.color_hex,
+        "brand": spool.brand,
+        "remaining_weight": spool.remaining_weight,
+        "initial_weight": spool.initial_weight,
+        "remaining_percent": spool.remaining_percent,
+        "location": spool.location,
+    }
+
+
+def shelf_spools(view: PrinterSpools | None) -> tuple[SpoolSummary, ...]:
+    """Return the shelf's live spools: unassigned and not archived.
+
+    Print Handy already leaves archived spools off the shelf; the filter
+    keeps that true for any server that does not.
+    """
+    if view is None or not view.available:
+        return ()
+    return tuple(spool for spool in view.shelf if not spool.archived)
+
+
+def shelf_attributes(view: PrinterSpools | None) -> dict[str, Any]:
+    """Return the attributes for one printer's spool shelf sensor.
+
+    ``spools`` lists the shelf spools (unassigned, not archived) with
+    the fields a dashboard needs, capped at SHELF_ATTRIBUTE_LIMIT rows
+    so the attributes stay recordable; ``truncated`` says when rows
+    were left out. ``total_remaining_weight`` sums the recorded weights
+    only (None when no shelf spool records one) — never estimated.
+    """
+    spools = shelf_spools(view)
+    weights = [s.remaining_weight for s in spools if s.remaining_weight is not None]
+    attrs: dict[str, Any] = {
+        "spools": [_shelf_row(spool) for spool in spools[:SHELF_ATTRIBUTE_LIMIT]],
+        "truncated": len(spools) > SHELF_ATTRIBUTE_LIMIT,
+        "total_remaining_weight": round(sum(weights), 1) if weights else None,
+    }
+    if view is not None and view.conflicts:
+        attrs["conflicts"] = list(view.conflicts)
+    return attrs
+
+
+def bot_attributes(instance: InstanceInfo) -> dict[str, Any]:
+    """Return the chat bot's platform, account and mode as attributes.
+
+    Each is None while the snapshot does not name it (no bot
+    configured, or no heartbeat yet).
+    """
+    return {
+        "platform": instance.bot_platform or None,
+        "user": instance.bot_user or None,
+        "mode": instance.bot_mode or None,
+    }
+
+
 @dataclass(frozen=True)
 class Snapshot:
     """A parsed /api/status response, plus per-printer live statuses."""
@@ -665,11 +733,12 @@ def parse_snapshot(raw: Any) -> Snapshot:
         host=str(raw.get("host") or ""),
         ok=_as_bool(raw.get("ok")),
         bot_ok=_as_bool(bot.get("ok")),
-        bot_platform=str(bot.get("platform") or ""),
-        bot_mode=str(bot.get("mode") or ""),
+        bot_platform=str(bot.get("platform") or heartbeat.get("platform") or ""),
+        bot_mode=str(bot.get("mode") or heartbeat.get("mode") or ""),
         bot_connected=heartbeat.get("connected")
         if isinstance(heartbeat.get("connected"), bool)
         else None,
+        bot_user=str(heartbeat.get("user") or ""),
         spoolman_ok=spoolman.get("ok") if isinstance(spoolman.get("ok"), bool) else None,
         spoolman_url=str(spoolman.get("url") or ""),
         spoolman_bundled=_as_bool(spoolman.get("bundled")),
