@@ -38,7 +38,7 @@ weight is recorded — never estimated.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 
@@ -79,6 +79,12 @@ class PrinterInfo:
     # entity (the image itself is fetched through the server's
     # snapshot proxy, never from this URL directly).
     camera_snapshot_url: str = ""
+    # Control facts the server sends on every roster row since #1400:
+    # whether it accepts printer controls at all (None from an older
+    # server that does not say), and the per-heater ceilings in °C
+    # ("nozzle", "bed", "chamber") its control routes refuse above.
+    controls_enabled: bool | None = None
+    temperature_limits: dict[str, float] = field(default_factory=dict)
 
     @property
     def display_name(self) -> str:
@@ -110,6 +116,23 @@ class InstanceInfo:
     doctor_failures: int = 0
     doctor_warnings: int = 0
     doctor_checks: tuple[DoctorCheck, ...] = ()
+    # The server's own stable id (#1400); empty from an older server.
+    instance_id: str = ""
+    controls_enabled: bool | None = None
+
+
+@dataclass(frozen=True)
+class Roster:
+    """The cheap roster from GET /api/printers (Print Handy #1400).
+
+    Read from the server's configuration only: no doctor run, no
+    service probe, no printer contact, so it is safe to poll often.
+    """
+
+    version: str = ""
+    instance_id: str = ""
+    controls_enabled: bool | None = None
+    printers: tuple[PrinterInfo, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -526,6 +549,101 @@ def _listener_row(listener: dict[str, Any], printer_id: str, is_default: bool) -
     return listener if is_default else {}
 
 
+def _optional_bool(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _temperature_limits(value: Any) -> dict[str, float]:
+    """Parse ``temperature_limits_c``; junk and non-numbers are dropped."""
+    if not isinstance(value, dict):
+        return {}
+    limits: dict[str, float] = {}
+    for heater, limit in value.items():
+        number = _number(limit)
+        if isinstance(heater, str) and number is not None and number > 0:
+            limits[heater] = number
+    return limits
+
+
+def _roster_printers(
+    roster: list[Any], listener: dict[str, Any] | None = None
+) -> tuple[PrinterInfo, ...]:
+    """Parse roster rows (shared by /api/status and /api/printers)."""
+    printers: list[PrinterInfo] = []
+    for entry in roster:
+        if not isinstance(entry, dict) or not entry.get("id"):
+            continue
+        printer_id = str(entry["id"])
+        is_default = _as_bool(entry.get("default"))
+        row = _listener_row(listener, printer_id, is_default) if listener else {}
+        ok = row.get("ok")
+        printers.append(
+            PrinterInfo(
+                printer_id=printer_id,
+                name=str(entry.get("name") or ""),
+                model=str(entry.get("model") or ""),
+                vendor=str(entry.get("vendor") or ""),
+                connection=str(entry.get("connection") or ""),
+                is_default=is_default,
+                listener_required=_as_bool(row.get("required")),
+                listener_ok=ok if isinstance(ok, bool) else None,
+                listener_reason=str(row.get("reason") or ""),
+                camera_snapshot_url=str(entry.get("camera_snapshot_url") or ""),
+                controls_enabled=_optional_bool(entry.get("controls_enabled")),
+                temperature_limits=_temperature_limits(entry.get("temperature_limits_c")),
+            )
+        )
+    return tuple(printers)
+
+
+def parse_roster(raw: Any) -> Roster:
+    """Parse a decoded GET /api/printers body. Raises TypeError on bad shape."""
+    if not isinstance(raw, dict):
+        raise TypeError("roster body is not a JSON object")
+    rows = raw.get("printers")
+    if not isinstance(rows, list):
+        raise TypeError("roster body has no printers list")
+    return Roster(
+        version=str(raw.get("version") or ""),
+        instance_id=str(raw.get("instance_id") or ""),
+        controls_enabled=_optional_bool(raw.get("controls_enabled")),
+        printers=_roster_printers(rows),
+    )
+
+
+def merge_roster(snapshot: Snapshot, roster: Roster) -> Snapshot:
+    """Lay a fresh cheap roster over the last full snapshot.
+
+    The roster decides which printers exist and their names, endpoints
+    and control facts; listener health only comes with the full
+    snapshot, so each printer keeps the listener fields it had there.
+    Instance health stays as the full snapshot measured it.
+    """
+    previous = {printer.printer_id: printer for printer in snapshot.printers}
+    printers = []
+    for printer in roster.printers:
+        old = previous.get(printer.printer_id)
+        if old is not None:
+            printer = replace(
+                printer,
+                listener_required=old.listener_required,
+                listener_ok=old.listener_ok,
+                listener_reason=old.listener_reason,
+            )
+        printers.append(printer)
+    instance = replace(
+        snapshot.instance,
+        version=roster.version or snapshot.instance.version,
+        instance_id=roster.instance_id or snapshot.instance.instance_id,
+        controls_enabled=(
+            roster.controls_enabled
+            if roster.controls_enabled is not None
+            else snapshot.instance.controls_enabled
+        ),
+    )
+    return replace(snapshot, instance=instance, printers=tuple(printers))
+
+
 def parse_snapshot(raw: Any) -> Snapshot:
     """Parse a decoded /api/status JSON body. Raises TypeError on bad shape."""
     if not isinstance(raw, dict):
@@ -540,28 +658,7 @@ def parse_snapshot(raw: Any) -> Snapshot:
     spoolman = raw.get("spoolman") if isinstance(raw.get("spoolman"), dict) else {}
     doctor = raw.get("doctor") if isinstance(raw.get("doctor"), list) else []
 
-    printers: list[PrinterInfo] = []
-    for entry in roster:
-        if not isinstance(entry, dict) or not entry.get("id"):
-            continue
-        printer_id = str(entry["id"])
-        is_default = _as_bool(entry.get("default"))
-        row = _listener_row(listener, printer_id, is_default)
-        ok = row.get("ok")
-        printers.append(
-            PrinterInfo(
-                printer_id=printer_id,
-                name=str(entry.get("name") or ""),
-                model=str(entry.get("model") or ""),
-                vendor=str(entry.get("vendor") or ""),
-                connection=str(entry.get("connection") or ""),
-                is_default=is_default,
-                listener_required=_as_bool(row.get("required")),
-                listener_ok=ok if isinstance(ok, bool) else None,
-                listener_reason=str(row.get("reason") or ""),
-                camera_snapshot_url=str(entry.get("camera_snapshot_url") or ""),
-            )
-        )
+    printers = _roster_printers(roster, listener)
 
     instance = InstanceInfo(
         version=str(raw.get("version") or ""),
@@ -579,5 +676,7 @@ def parse_snapshot(raw: Any) -> Snapshot:
         doctor_failures=sum(1 for row in doctor if isinstance(row, dict) and row.get("status") == "fail"),
         doctor_warnings=sum(1 for row in doctor if isinstance(row, dict) and row.get("status") == "warn"),
         doctor_checks=_doctor_checks(doctor),
+        instance_id=str(raw.get("instance_id") or ""),
+        controls_enabled=_optional_bool(raw.get("controls_enabled")),
     )
-    return Snapshot(instance=instance, printers=tuple(printers))
+    return Snapshot(instance=instance, printers=printers)

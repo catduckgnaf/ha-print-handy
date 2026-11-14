@@ -67,6 +67,10 @@ class FakeApiClient:
         """Return the recorded snapshot."""
         return parse_snapshot(SNAPSHOT_BODY)
 
+    async def async_get_roster(self):
+        """Return no roster, like a server before Print Handy #1400."""
+        return None
+
     async def async_get_printer_statuses(self, printer_ids):
         """Return an unavailable status per printer."""
         return {

@@ -32,6 +32,7 @@ from .const import (
     CONF_HUB_SCAN_INTERVAL,
     CONF_INSTANCE_ID,
     CONF_SCAN_INTERVAL,
+    CONF_SERVER_ID,
     CONF_TOKEN,
     DEFAULT_HUB_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
@@ -68,27 +69,39 @@ def _token_schema() -> vol.Schema:
 
 async def async_validate_connection(hass: Any, url: str, token: str) -> dict[str, str]:
     """Try one /api/status read; return a {field: error} map (empty = ok)."""
+    errors, _ = await async_probe_server(hass, url, token)
+    return errors
+
+
+async def async_probe_server(
+    hass: Any, url: str, token: str
+) -> tuple[dict[str, str], str]:
+    """Try one /api/status read.
+
+    Returns the {field: error} map (empty = ok) and the server's own
+    instance id (Print Handy #1400; empty from an older server).
+    """
     session = async_get_clientsession(hass)
     client = PrintHandyApiClient(session=session, base_url=url, token=token)
     try:
-        await client.async_get_status()
+        snapshot = await client.async_get_status()
     except PrintHandyAuthError:
-        return {"base": "invalid_auth"}
+        return {"base": "invalid_auth"}, ""
     except PrintHandyRateLimitedError:
-        return {"base": "rate_limited"}
+        return {"base": "rate_limited"}, ""
     except PrintHandyHostRefusedError:
-        return {"base": "forbidden_host"}
+        return {"base": "forbidden_host"}, ""
     except PrintHandyServerError:
-        return {"base": "server_error"}
+        return {"base": "server_error"}, ""
     except PrintHandyConnectionError:
-        return {"base": "cannot_connect"}
+        return {"base": "cannot_connect"}, ""
     except PrintHandyApiError as err:  # an answer we cannot use is not a crash
         LOGGER.debug("Unusable response from Print Handy at %s: %s", url, err)
-        return {"base": "unknown"}
+        return {"base": "unknown"}, ""
     except Exception:  # noqa: BLE001 - anything else is also a bad answer
         LOGGER.exception("Unexpected response from Print Handy at %s", url)
-        return {"base": "unknown"}
-    return {}
+        return {"base": "unknown"}, ""
+    return {}, snapshot.instance.instance_id
 
 
 class PrintHandyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -118,18 +131,25 @@ class PrintHandyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 self._async_abort_entries_match({CONF_URL: url})
                 token = str(user_input.get(CONF_TOKEN, "") or "")
-                errors = await async_validate_connection(self.hass, url, token)
+                errors, server_id = await async_probe_server(self.hass, url, token)
                 if not errors:
+                    # A server that names itself (#1400) is recognized under
+                    # any address: adding it again only moves the existing
+                    # entry to the new URL and token.
                     instance_id = uuid.uuid4().hex
-                    await self.async_set_unique_id(instance_id)
-                    self._abort_if_unique_id_configured()
+                    await self.async_set_unique_id(server_id or instance_id)
+                    self._abort_if_unique_id_configured(
+                        updates={CONF_URL: url, CONF_TOKEN: token}
+                    )
+                    data = {
+                        CONF_URL: url,
+                        CONF_TOKEN: token,
+                        CONF_INSTANCE_ID: instance_id,
+                    }
+                    if server_id:
+                        data[CONF_SERVER_ID] = server_id
                     return self.async_create_entry(
-                        title=f"Print Handy ({url})",
-                        data={
-                            CONF_URL: url,
-                            CONF_TOKEN: token,
-                            CONF_INSTANCE_ID: instance_id,
-                        },
+                        title=f"Print Handy ({url})", data=data
                     )
 
         return self.async_show_form(
@@ -200,7 +220,15 @@ class PrintHandyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 ):
                     errors[CONF_URL] = "url_in_use"
                 else:
-                    errors = await async_validate_connection(self.hass, url, token)
+                    errors, server_id = await async_probe_server(
+                        self.hass, url, token
+                    )
+                    known = str(entry.data.get(CONF_SERVER_ID) or "")
+                    if not errors and known and server_id and server_id != known:
+                        # A different Print Handy: moving this entry there
+                        # would attach its printers' history to the wrong
+                        # machines. Add the other server as its own entry.
+                        errors = {"base": "wrong_server"}
                 if not errors:
                     return self.async_update_reload_and_abort(
                         entry,

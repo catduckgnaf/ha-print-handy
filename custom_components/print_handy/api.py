@@ -65,14 +65,17 @@ from .const import (
     PRINTER_TARGET_PATH,
     REQUEST_TIMEOUT,
     SPOOL_ACTIONS,
+    ROSTER_PATH,
     STATUS_PATH,
     TOKEN_HEADER,
 )
 from .model import (
     PrinterSpools,
     PrinterStatus,
+    Roster,
     Snapshot,
     parse_printer_status,
+    parse_roster,
     parse_snapshot,
     parse_spools_view,
     unavailable_spools,
@@ -401,6 +404,26 @@ class PrintHandyApiClient:
             raise PrintHandyResponseError(
                 f"Print Handy answered, but not with a usable status snapshot: {err}"
             ) from err
+
+    async def async_get_roster(self) -> Roster | None:
+        """Fetch and parse the cheap roster, GET /api/printers (Print Handy #1400).
+
+        Returns None when the server predates the endpoint (it answers
+        404, or with a body that is not a roster): the caller then keeps
+        using /api/status as the roster, as before.
+        """
+        status, body = await self._async_get_json(f"{self.base_url}{ROSTER_PATH}")
+        if status == 404:
+            return None
+        if status != 200:
+            raise PrintHandyApiError(
+                f"Print Handy Web UI returned HTTP {status}{_detail(body)} "
+                "for the printer roster"
+            )
+        try:
+            return parse_roster(body)
+        except (TypeError, ValueError, KeyError):
+            return None
 
     async def async_get_printer_status(self, printer_id: str) -> PrinterStatus:
         """Fetch and parse GET /api/printers/<id>/status for one printer.

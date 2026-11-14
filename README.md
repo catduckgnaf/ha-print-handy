@@ -4,13 +4,14 @@ A Home Assistant custom integration for [Print Handy](https://github.com/catduck
 
 ## Supported versions
 
-Developed and tested against Print Handy 2.2.7. Print Handy 2.2.2 is the oldest release with the per-printer status endpoint this integration needs; older releases are not supported. The Emergency stop, restart, `send_gcode` and `exclude_object` features need a build that has those routes (see below). Newer releases are expected to keep working because the API only grows. Home Assistant 2024.11 or newer is required.
+Developed and tested against Print Handy 2.2.7. Print Handy 2.2.2 is the oldest release with the per-printer status endpoint this integration needs; older releases are not supported. The Emergency stop, restart, `send_gcode` and `exclude_object` features need a build that has those routes (see below). Newer releases are expected to keep working because the API only grows. Print Handy builds after 2.3.2 (Print Handy #1400) add a cheap roster, the server's own instance id, a controls-enabled flag and per-heater temperature ceilings; 0.6.2 uses them when present and behaves as before when not. Home Assistant 2024.11 or newer is required.
 
-## What it does today (0.6.1)
+## What it does today (0.6.2)
 
 The integration polls Print Handy's Web UI API at three cadences, because `GET /api/status` makes the server run its whole self-check:
 
 - `GET /api/status` (roster, versions, service health, doctor rows): once at startup and then every 5 minutes (option: *Instance status interval*). A slow or failed refresh keeps the last roster, makes only the instance-level entities unavailable and retries after a minute; printers stay available while their own polls succeed.
+- `GET /api/printers` (the cheap roster: printer list, names, endpoints, controls flag and temperature ceilings; no self-check, no printer contact): on every 30-second tick between the full status reads, so a printer added in Print Handy, or controls switched on or off, shows up within one tick. A server without this endpoint answers 404 once and is not asked again until the integration reloads. Each tick makes at most one roster-or-status request plus one status request per printer.
 - `GET /api/printers/<id>/status` (live status of each printer): every 30 seconds (option: *Printer polling interval*).
 - `GET /api/printers/<id>/spools` (spool assignments): every 2 minutes, and immediately after a spool service call.
 
@@ -70,7 +71,7 @@ Not yet available: print thumbnails (Print Handy has no per-printer thumbnail so
 
 Requires a Print Handy build with the per-printer status endpoint (Print Handy PR #667, for the first release after 2.2.1). Against an older Print Handy the roster and health entities above still work; the live job entities read `unavailable`.
 
-The phase-3 controls additionally require a Print Handy build with the control API (Print Handy issue #708) **and** controls enabled on the Print Handy side — they are off by default there, behind the operator's own setting. Against a Print Handy without the control API, or with controls disabled, the buttons and numbers are still created but every press or set fails visibly in Home Assistant with Print Handy's refusal; nothing fails silently.
+The phase-3 controls additionally require a Print Handy build with the control API (Print Handy issue #708) **and** controls enabled on the Print Handy side — they are off by default there, behind the operator's own setting. Against a Print Handy without the control API the buttons and numbers are still created but every press or set fails visibly in Home Assistant with Print Handy's refusal; nothing fails silently. A Print Handy that reports its controls flag (#1400) makes the control buttons and target-temperature numbers **unavailable while its controls are off**, and available again within one tick of turning them on; an older Print Handy does not say, so its controls stay available and a refusal still fails visibly.
 
 The 0.5.0 remainder (the Emergency stop / restart buttons, the `send_gcode` and `exclude_object` services, and the Current object sensor) additionally requires the companion Print Handy build that adds those endpoints (`POST /api/printers/<id>/emergency_stop|firmware_restart|server_restart|gcode|exclude`, plus `current_object` / `objects` / `excluded_objects` in the per-printer status) — see the pull request description for the companion Print Handy PR. Against an older Print Handy the new buttons and services fail visibly with Print Handy's refusal and the Current object sensor is not created; the rest of the integration works unchanged. The new buttons and services sit behind the same controls gate, so they also need controls enabled on the Print Handy side.
 
@@ -105,7 +106,7 @@ Copy `custom_components/print_handy/` into your Home Assistant `config/custom_co
 2. In Home Assistant: **Settings → Devices & services → Add integration → Print Handy**.
 3. Enter the Web UI URL and the credential. Use the server's **IP address** or a local host name: while the Web UI has no password, Print Handy refuses requests that use a public-looking host name (anything with a dot that is not `.local`, `.lan`, `.home`, `.internal` or `.home.arpa`), and the setup form says so. The credential field takes either the Web UI **access token** (`WEBUI_ACCESS_TOKEN`) or the Web UI **password**; both work in the same header. A Print Handy install with no password is open on the network by design, so the field is simply optional there.
 4. Options change the printer polling interval (default 30 seconds) and the instance status interval (default 300 seconds).
-5. To change the URL or credential later, use **Reconfigure** on the integration entry. Entity and device ids hang off a stable instance id, not the URL, so switching from a host name to an IP address or from http to https keeps every entity and its history. If the credential stops working, Home Assistant asks for a new one (it may be left empty for a server that went back to open).
+5. To change the URL or credential later, use **Reconfigure** on the integration entry. Entity and device ids hang off a stable instance id, not the URL, so switching from a host name to an IP address or from http to https keeps every entity and its history. A Print Handy that sends its own instance id (#1400) is also recognized by that id: adding the same server again under a new address moves the existing entry instead of creating a duplicate, and Reconfigure refuses an address that answers as a different Print Handy. If the credential stops working, Home Assistant asks for a new one (it may be left empty for a server that went back to open).
 
 ### Upgrading from 0.5.x
 
@@ -115,7 +116,7 @@ The config entry migrates itself on the first start: entity and device registry 
 
 - Polling is read-only; commands are sent only when you press a control button, set a target temperature or call a service (spool, `send_gcode` or `exclude_object`), and only to Print Handy (never directly to a printer). Print Handy decides whether to honor them — its controls gate is off by default.
 - The access token or password is stored only in the config entry and sent only as the `X-WebUI-Token` header. Diagnostics downloads redact the URL, token and server host name.
-- Temperature number limits are the fixed 0-350 (nozzle) and 0-150 (bed) UI bounds; Print Handy's status payload does not expose per-printer limits, and Print Handy and the printer refuse out-of-range values.
+- Temperature number maximums are the per-heater ceilings Print Handy reports for each printer (#1400), the same values its control routes refuse above. Against an older Print Handy they fall back to 0-350 (nozzle) and 0-150 (bed); Print Handy and the printer refuse out-of-range values either way.
 - Print Handy's optional MQTT events (`print-handy/<event>`) work unchanged alongside this integration for automations that only need print started/finished notifications today.
 
 ## Support and community

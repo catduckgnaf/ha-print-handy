@@ -13,6 +13,7 @@
       "rate_limited": "Print Handy is temporarily rejecting requests from Home Assistant after failed attempts. Wait a minute and try again.",
       "server_error": "Print Handy answered with a server error. Check its logs and try again.",
       "url_in_use": "Another Print Handy entry already uses this address.",
+      "wrong_server": "That address answers as a different Print Handy instance. Add it as a new entry instead.",
       "unknown": "Print Handy answered, but not with a usable status snapshot."
     },
     "step": {

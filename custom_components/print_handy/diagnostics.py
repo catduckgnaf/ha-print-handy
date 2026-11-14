@@ -11,7 +11,7 @@ from homeassistant.const import CONF_URL
 from homeassistant.core import HomeAssistant
 
 from . import PrintHandyConfigEntry
-from .const import CONF_INSTANCE_ID, CONF_TOKEN, VERSION
+from .const import CONF_INSTANCE_ID, CONF_SERVER_ID, CONF_TOKEN, VERSION
 
 # Config entry and snapshot fields that hold an address, a host name or a
 # credential. ``detail`` strings can embed the printer or service address
@@ -20,6 +20,7 @@ TO_REDACT = {
     CONF_URL,
     CONF_TOKEN,
     CONF_INSTANCE_ID,
+    CONF_SERVER_ID,
     "host",
     "spoolman_url",
     "detail",
@@ -77,6 +78,7 @@ async def async_get_config_entry_diagnostics(
                 else None
             ),
             "hub_interval_s": coordinator.hub_interval,
+            "roster_supported": coordinator.roster_supported,
         },
         "snapshot": (
             async_redact_data(dataclasses.asdict(snapshot), TO_REDACT)

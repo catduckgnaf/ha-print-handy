@@ -172,6 +172,11 @@ class PrintHandyPrinterEntity(CoordinatorEntity[PrintHandyDataUpdateCoordinator]
     # Entities that read the printer's live status are unavailable while
     # Print Handy reports the printer itself as unavailable.
     _requires_live_status = False
+    # Control entities are unavailable while the server says its printer
+    # controls are off ([webui] controls_enabled = false): every press or
+    # set would only be refused. Servers before #1400 do not say, and
+    # their controls stay available (a refusal still fails visibly).
+    _requires_controls = False
 
     def __init__(
         self,
@@ -213,7 +218,10 @@ class PrintHandyPrinterEntity(CoordinatorEntity[PrintHandyDataUpdateCoordinator]
         Live-status entities are also unavailable while the printer's own
         status says it cannot be read, instead of reporting a made-up value.
         """
-        if not (super().available and self.printer is not None):
+        printer = self.printer
+        if not (super().available and printer is not None):
+            return False
+        if self._requires_controls and printer.controls_enabled is False:
             return False
         if self._requires_live_status:
             status = self.status

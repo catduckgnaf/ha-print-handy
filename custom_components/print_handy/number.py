@@ -16,10 +16,12 @@ suffix vocabulary in DESIGN.md is untouched.
 Setting a value posts both heaters' targets to Print Handy's control
 API (Print Handy #708): the heater being set carries the new value,
 the other heater carries its current target, so a JSON null is only
-sent for a heater whose target is genuinely unknown. The min/max
-range here is a UI bound only — Print Handy and the printer remain
-the authority and refuse out-of-range values, which surfaces as a
-visible failure on the set call.
+sent for a heater whose target is genuinely unknown. The maximum is
+the server's own per-heater ceiling where it sends one (#1400), else
+a wide fallback; Print Handy and the printer remain the authority and
+refuse out-of-range values, which surfaces as a visible failure on
+the set call. The numbers are unavailable while the server reports
+its controls off.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import PrintHandyConfigEntry
+from .const import DEFAULT_HEATER_MAX
 from .coordinator import PrintHandyDataUpdateCoordinator
 from .entity import (
     PrintHandyPrinterEntity,
@@ -48,13 +51,8 @@ from .model import PrinterInfo
 
 LOGGER = logging.getLogger(__name__)
 
-# UI bounds for the number sliders (degrees Celsius). Deliberately
-# wider than any current printer's limits; the printer enforces its
-# own, and an over-range set fails visibly rather than being clamped.
-_HEATER_BOUNDS: dict[str, tuple[float, float]] = {
-    "hotend": (0.0, 350.0),
-    "bed": (0.0, 150.0),
-}
+# The server's name for each heater in ``temperature_limits_c``.
+_SERVER_HEATER = {"hotend": "nozzle", "bed": "bed"}
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -120,6 +118,8 @@ class PrintHandyPrinterTargetNumber(PrintHandyPrinterEntity, NumberEntity):
     entity_description: PrintHandyNumberEntityDescription
 
     _requires_live_status = True
+    _requires_controls = True
+    _attr_native_min_value = 0.0
     _attr_device_class = NumberDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_native_step = 1.0
@@ -137,9 +137,21 @@ class PrintHandyPrinterTargetNumber(PrintHandyPrinterEntity, NumberEntity):
         self._attr_unique_id = printer_unique_id(
             coordinator, printer.printer_id, f"number:{description.key}"
         )
-        low, high = _HEATER_BOUNDS[description.heater]
-        self._attr_native_min_value = low
-        self._attr_native_max_value = high
+
+    @property
+    def native_max_value(self) -> float:
+        """The server's own ceiling for this heater, else a wide fallback.
+
+        Print Handy (#1400) sends the per-heater ceiling its control
+        routes refuse above, so the slider stops exactly where the
+        server would. An older server sends none; the fallback is wider
+        than any current printer and an over-range set fails visibly.
+        """
+        heater = _SERVER_HEATER[self.entity_description.heater]
+        printer = self.printer
+        if printer is not None and heater in printer.temperature_limits:
+            return printer.temperature_limits[heater]
+        return DEFAULT_HEATER_MAX[heater]
 
     @property
     def native_value(self) -> float | None:

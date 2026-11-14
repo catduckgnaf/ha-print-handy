@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from custom_components.print_handy.model import (
     parse_printer_status,
+    parse_roster,
     parse_snapshot,
     parse_spools_view,
     unavailable_spools,
@@ -37,6 +38,11 @@ class World:
     spool_calls: int = 0
     controls: list[tuple] = field(default_factory=list)
     control_error: Exception | None = None
+    # The cheap roster (Print Handy #1400). Off by default: the older
+    # servers most tests model do not have it.
+    roster_supported: bool = False
+    roster_calls: int = 0
+    instance_id: str = ""
 
 
 class FakeClient:
@@ -54,8 +60,20 @@ class FakeClient:
         w.hub_calls += 1
         if w.hub_error is not None:
             raise w.hub_error
-        return parse_snapshot(
-            status_body(*w.rows, spoolman_ok=w.spoolman_ok, doctor=w.doctor)
+        body = status_body(*w.rows, spoolman_ok=w.spoolman_ok, doctor=w.doctor)
+        if w.instance_id:
+            body["instance_id"] = w.instance_id
+        return parse_snapshot(body)
+
+    async def async_get_roster(self):
+        """Async get roster: None (a 404) unless the World's server has it."""
+        w = self.world
+        w.roster_calls += 1
+        if not w.roster_supported:
+            return None
+        return parse_roster(
+            {"ok": True, "version": "2.4.0", "instance_id": w.instance_id,
+             "printers": [dict(row) for row in w.rows]}
         )
 
     async def async_get_camera_snapshot(self, printer_id):
