@@ -394,6 +394,35 @@ behavior against a server that does not send it.
   (`nozzle`, `bed`, `chamber`, °C). The target numbers take their maximum
   from it, falling back to 350 / 150 °C.
 
+### 3.7 Shipped in 0.6.3 (dashboard data, JSON POST bodies)
+
+Data the integration already polls, exposed so a dashboard needs no
+side script reading Print Handy's API directly.
+
+- **Spool shelf sensor.** Per printer with an available spools view:
+  state is the count of shelf spools (the view's `shelf`, minus any
+  archived row); `spools` lists them (`model.shelf_attributes`) with id,
+  name, material, color, color_hex, brand, remaining and initial weight,
+  remaining percent and location, capped at `SHELF_ATTRIBUTE_LIMIT` (40)
+  rows so the attributes stay under the recorder's 16 KB limit;
+  `truncated` flags a cut list, and `total_remaining_weight` sums the
+  recorded weights of every shelf spool. Unavailable while the spools
+  read fails, like the slot sensors, so an outage never reads as an empty
+  shelf. Loaded spools stay on the slot sensors.
+- **Bot attributes.** `bot_connected` carries `platform`
+  (`bot.platform`, falling back to the heartbeat's), `user`
+  (`bot.heartbeat.user`) and `mode`. The bot user is redacted in
+  diagnostics.
+- **Every POST is JSON.** Print Handy's control and spool routes check
+  `Content-Type: application/json` before reading the body and answer
+  415 otherwise; aiohttp sends neither body nor Content-Type for
+  `json=None`. The client now sends `{}` for the bodiless actions
+  (`sync`, pause, resume), which the server reads exactly like an empty
+  body.
+- **Not added: job history.** Print Handy has no per-printer job list
+  endpoint; `/api/data` is year aggregates over its print records. A
+  recent-jobs sensor waits on a server endpoint for it.
+
 ## 4. The gap, precisely — closed, except the thumbnail
 
 Nothing in this repo could manufacture the phase-2 entities: the data

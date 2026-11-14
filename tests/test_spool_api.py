@@ -3,7 +3,7 @@
 Request and response shapes are the ones Print Handy's
 webui/spools.py sends: GET slots/shelf/spools/conflicts, POST bodies
 ``{slot, spool_id}`` / ``{slot_a, slot_b}`` / ``{slot}`` /
-``{brand, material, color, grams, hex}`` / no body for sync, and
+``{brand, material, color, grams, hex}`` / ``{}`` for sync, and
 refusals as ``{ok: false, reason}`` with a named HTTP status.
 """
 
@@ -184,12 +184,31 @@ def test_add_omits_optional_fields_when_not_given():
     assert session.calls[0][3] == {"material": "PLA", "color": "White", "grams": 500.0}
 
 
-def test_sync_posts_no_body():
-    """Sync POSTs to the sync endpoint with no body, per the API contract."""
+def test_sync_posts_an_empty_json_body():
+    """Sync POSTs ``{}``: the route answers 415 to a POST with no JSON body.
+
+    aiohttp sends no body and no Content-Type for ``json=None``, which
+    Print Handy refuses with "spool POSTs must be application/json".
+    """
     session = _Session({_spools_url("ad5x", "sync"): _FakeResponse(200, {"ok": True})})
     asyncio.run(_client(session).async_sync_spools("ad5x"))
     assert session.calls[0][1] == _spools_url("ad5x", "sync")
-    assert session.calls[0][3] is None
+    assert session.calls[0][3] == {}
+
+
+def test_bodiless_spool_post_still_sends_json():
+    """The request layer never sends a POST without a JSON body."""
+    session = _Session({_spools_url("ad5x", "sync"): _FakeResponse(200, {"ok": True})})
+    asyncio.run(_client(session)._async_post_spool("ad5x", "sync", None))
+    assert session.calls[0][3] == {}
+
+
+def test_sync_415_surfaces_the_server_reason():
+    """A 415 refusal (the reported bug) names the server's reason."""
+    body = {"ok": False, "reason": "spool POSTs must be application/json. Nothing changed."}
+    session = _Session({_spools_url("ad5x", "sync"): _FakeResponse(415, body)})
+    with pytest.raises(api.PrintHandySpoolRefusedError, match="HTTP 415"):
+        asyncio.run(_client(session).async_sync_spools("ad5x"))
 
 
 @pytest.mark.parametrize(

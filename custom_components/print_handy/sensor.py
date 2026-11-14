@@ -35,6 +35,8 @@ from .model import (
     active_ams_tray,
     ams_trays,
     has_ams_filament,
+    shelf_attributes,
+    shelf_spools,
     slot_spool_attributes,
 )
 
@@ -297,6 +299,9 @@ async def async_setup_entry(
                     for row in view.slots
                     if row.spool is not None
                     and row.spool.remaining_weight is not None
+                )
+                entities.append(
+                    PrintHandyPrinterShelfSensor(coordinator, entry, printer)
                 )
         return entities
 
@@ -587,6 +592,53 @@ class PrintHandyPrinterSlotWeightSensor(PrintHandyPrinterEntity, SensorEntity):
         if row is None or row.spool is None:
             return None
         return row.spool.remaining_weight
+
+
+class PrintHandyPrinterShelfSensor(PrintHandyPrinterEntity, SensorEntity):
+    """The spools on one printer's shelf (0.6.3).
+
+    State is the number of shelf spools (assigned to no slot, not
+    archived); the ``spools`` attribute lists them with id, name,
+    material, color, remaining weight and percent and location, so a
+    dashboard can show the shelf without reading Print Handy itself.
+    The list is capped (model.SHELF_ATTRIBUTE_LIMIT) to stay under the
+    recorder's attribute size limit.
+    """
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "spools"
+    _attr_translation_key = "shelf"
+
+    def __init__(
+        self,
+        coordinator: PrintHandyDataUpdateCoordinator,
+        entry: PrintHandyConfigEntry,
+        printer: PrinterInfo,
+    ) -> None:
+        """Initialize."""
+        super().__init__(coordinator, entry, printer)
+        self._attr_unique_id = printer_unique_id(
+            coordinator, printer.printer_id, "shelf"
+        )
+
+    @property
+    def available(self) -> bool:
+        """Unavailable when the spools poll itself failed for this printer.
+
+        Otherwise a Spoolman outage would read as an empty shelf.
+        """
+        view = self.spool_view
+        return super().available and view is not None and view.available
+
+    @property
+    def native_value(self) -> int:
+        """The number of spools on the shelf."""
+        return len(shelf_spools(self.spool_view))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """The shelf spools, capped, plus their total recorded weight."""
+        return shelf_attributes(self.spool_view)
 
 
 class PrintHandyInstanceSensor(PrintHandyEntity, SensorEntity):

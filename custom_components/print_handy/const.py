@@ -4,7 +4,7 @@ from homeassistant.const import Platform
 
 NAME = "Print Handy"
 DOMAIN = "print_handy"
-VERSION = "0.6.2"
+VERSION = "0.6.3"
 ATTRIBUTION = "Data provided by Print Handy"
 ISSUE_URL = "https://github.com/catduckgnaf/ha-print-handy/issues"
 

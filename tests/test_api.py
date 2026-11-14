@@ -198,8 +198,10 @@ def test_control_actions_post_to_the_right_printer_urls():
         url, headers, body = session.posts[0]
         assert url == _control_url("ad5x", action)
         assert headers == {"X-WebUI-Token": "sekrit"}
-        # Print Handy refuses cancel without an explicit confirm (#708).
-        assert body == ({"confirm": True} if action == "cancel" else None)
+        # Print Handy refuses cancel without an explicit confirm (#708);
+        # pause and resume carry {} because every control POST must be
+        # application/json (the route answers 415 otherwise).
+        assert body == ({"confirm": True} if action == "cancel" else {})
 
 
 def test_new_button_actions_post_with_the_confirm_body():

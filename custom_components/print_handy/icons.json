@@ -40,6 +40,9 @@
       "slot_spool_weight": {
         "default": "mdi:scale"
       },
+      "shelf": {
+        "default": "mdi:bookshelf"
+      },
       "faults": {
         "default": "mdi:alert"
       }

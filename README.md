@@ -12,7 +12,7 @@ A Home Assistant custom integration for [Print Handy](https://github.com/catduck
 
 Developed and tested against Print Handy 2.2.7. Print Handy 2.2.2 is the oldest release with the per-printer status endpoint this integration needs; older releases are not supported. The Emergency stop, restart, `send_gcode` and `exclude_object` features need a build that has those routes (see below). Newer releases are expected to keep working because the API only grows. Print Handy builds after 2.3.2 (Print Handy #1400) add a cheap roster, the server's own instance id, a controls-enabled flag and per-heater temperature ceilings; 0.6.2 uses them when present and behaves as before when not. Home Assistant 2024.11 or newer is required.
 
-## What it does today (0.6.2)
+## What it does today (0.6.3)
 
 The integration polls Print Handy's Web UI API at three cadences, because `GET /api/status` makes the server run its whole self-check:
 
@@ -38,6 +38,7 @@ A 429 reply (Print Handy locks an address out after repeated wrong tokens) makes
   - **Camera** entity (0.6.1, issue #14) — on printers whose roster row carries a camera snapshot URL: a still camera served through Print Handy's snapshot proxy (`GET /api/printers/<id>/camera/snapshot`), fetched on demand, never polled. Cameras the roster does not signal (for example a Bambu printer's built-in camera, which Print Handy reaches through its adapter) gain no entity until the roster carries a camera field for them.
   - **Faults** sensor (0.6.1, issue #14) — on Bambu printers: the count of active HMS faults, with the fault codes, their descriptions and the printer's own error text as attributes. Other families send no fault data and gain no sensor.
   - **Slot spool weight** sensors (0.6.1, issue #14) — one per slot whose spool records a remaining weight: the weight in grams as a number, next to the slot spool sensor's name state.
+  - **Spool shelf** sensor (0.6.3) — on printers whose Print Handy serves the spools endpoint: the number of spools on the shelf (assigned to no slot, not archived), with a `spools` attribute listing each one's `id`, `name`, `material`, `color`, `color_hex`, `brand`, `remaining_weight`, `initial_weight`, `remaining_percent` and `location`, plus `total_remaining_weight` (the sum of the recorded weights). The list stops at 40 spools so the attributes stay under Home Assistant's 16 KB recorder limit; `truncated` is true when spools were left out (the count and the total still cover all of them). Unavailable, not empty, while the spool read fails.
   - **Low filament** binary sensors (0.6.1, issue #14) — one per slot with a spool: on while the spool's recorded remaining percent is at or below 10%, or, where only grams are recorded, at or below 50 g.
   - **Printing** and **Printing error** binary sensors, for conditional cards and automations.
   - **Online** binary sensor — on while Print Handy's listener reports the printer healthy.
@@ -46,11 +47,11 @@ A 429 reply (Print Handy locks an address out after repeated wrong tokens) makes
   - **Status** sensor (`ok` / `problem`), **Version** and **Doctor failures** diagnostic sensors.
   - **Ready** binary sensor (0.6.1, issue #14) — on while the instance snapshot reads ok.
   - **One binary sensor per doctor check** (0.6.1, issue #14) — a problem sensor that turns on while that check fails, with the check's raw status and the server's detail text as attributes. A failing check also raises a **Repairs issue** in Home Assistant while it fails and clears it when the check passes again; warnings stay on the binary sensors and do not raise issues.
-  - **Bot connected** and **Spoolman connected** connectivity binary sensors. Spoolman connected reads unknown when Spoolman is not configured, and off only when a configured Spoolman is down.
+  - **Bot connected** and **Spoolman connected** connectivity binary sensors. Bot connected carries the chat bot's `platform` (for example `discord`), the `user` account it is signed in as and its `mode` as attributes (0.6.3), each null until Print Handy reports it. Spoolman connected reads unknown when Spoolman is not configured, and off only when a configured Spoolman is down.
 
 The integration also fires a **`print_handy_print_finished`** event (0.6.1, issue #14) when a printer's live state moves from printing or paused to complete, with `printer_id`, `printer_name`, `filename` and the config entry's `entry_id` as event data — the hook for "tell me when the print is done" automations.
 
-Entity ids use one fixed suffix vocabulary per printer (`_current_state`, `_print_progress`, `_filename`, `_nozzle_temperature`, `_bed_temperature`, `_estimated_finish_time`, `_current_layer`, `_current_object`, `_slot_1_spool` … `_slot_4_spool`, `_slot_1_spool_weight` … and `_slot_1_low_filament` …, `_camera`, `_faults`, plus button suffixes `_pause`, `_resume`, `_cancel`, `_emergency_stop`, `_firmware_restart`; the Moonraker restart is `_moonraker_restart` on new installs and keeps its old `_server_restart` id where it already exists), so dashboards and cards can hard-code them safely — see [DESIGN.md](DESIGN.md).
+Entity ids use one fixed suffix vocabulary per printer (`_current_state`, `_print_progress`, `_filename`, `_nozzle_temperature`, `_bed_temperature`, `_estimated_finish_time`, `_current_layer`, `_current_object`, `_slot_1_spool` … `_slot_4_spool`, `_slot_1_spool_weight` … and `_slot_1_low_filament` …, `_spool_shelf`, `_camera`, `_faults`, plus button suffixes `_pause`, `_resume`, `_cancel`, `_emergency_stop`, `_firmware_restart`; the Moonraker restart is `_moonraker_restart` on new installs and keeps its old `_server_restart` id where it already exists), so dashboards and cards can hard-code them safely — see [DESIGN.md](DESIGN.md).
 
 ## Control services
 
@@ -69,7 +70,7 @@ Five services manage spools through the same Print Handy spool API the Web UI Sp
 - `print_handy.swap_spools` — fields: `printer_id`, `slot_a`, `slot_b`.
 - `print_handy.unassign_spool` — fields: `printer_id`, `slot`. The spool goes back on the shelf.
 - `print_handy.add_spool` — fields: `printer_id`, `material`, `color`, `grams`, optional `brand` and `hex`. Creates one spool on the shelf; load it with `assign_spool` afterwards.
-- `print_handy.sync_spools` — fields: `printer_id`. Reconciles that printer's slot state with Spoolman.
+- `print_handy.sync_spools` — fields: `printer_id`. Reconciles that printer's slot state with Spoolman. (0.6.2 and older sent this POST without a JSON body, which Print Handy refuses with HTTP 415; fixed in 0.6.3.)
 
 The spool writes sit behind the same Print Handy controls gate as the phase-3 controls (off by default there). A refusal — controls disabled, unknown spool or slot, a conflict — fails the service call visibly in Home Assistant with Print Handy's reason; nothing fails silently. The API's spool-record `edit` action is not exposed as a service in 0.4.0; edit spool records in Print Handy's Web UI Spools page. Spoolman's own UI is a second option only for installs that run an external Spoolman — the Spoolman bundled with Print Handy has no web UI (see [Dashboards: opening spools](#dashboards-opening-spools)).
 
