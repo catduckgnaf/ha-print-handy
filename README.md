@@ -1,4 +1,10 @@
+<p align="center"><img src="custom_components/print_handy/brand/logo.png" alt="Print Handy" width="320"></p>
+
 # Print Handy for Home Assistant
+
+[![HACS](https://img.shields.io/badge/HACS-Integration-41BDF5.svg)](https://hacs.xyz/)
+[![Release](https://img.shields.io/github/v/release/catduckgnaf/ha-print-handy)](https://github.com/catduckgnaf/ha-print-handy/releases)
+[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=catduckgnaf&repository=ha-print-handy&category=integration)
 
 A Home Assistant custom integration for [Print Handy](https://github.com/catduckgnaf/print-handy) — every printer Print Handy manages, in one integration, instead of a separate Moonraker, OctoPrint or vendor integration per printer.
 
@@ -90,11 +96,15 @@ An install that runs its own external Spoolman (`PRINT_HANDY_BUNDLED_SPOOLMAN=fa
 
 ## Installation
 
-### HACS (custom repository)
+### Print Handy itself
 
-1. In HACS, open the menu in the top right and choose **Custom repositories**.
-2. Add `https://github.com/catduckgnaf/ha-print-handy` with category **Integration**.
-3. Install **Print Handy** from HACS and restart Home Assistant.
+The integration talks to a running Print Handy. On **Home Assistant OS**, install Print Handy as an app from [print-handy-haos-addon](https://github.com/catduckgnaf/print-handy-haos-addon): add that repository under **Settings > Apps > App store > Repositories**, install **Print Handy**, and use `http://<your Home Assistant IP>:8088` as the URL below. It tracks Print Handy releases automatically. Docker Compose, Unraid and plain Linux installs are covered in the [Print Handy docs](https://github.com/catduckgnaf/print-handy-docs).
+
+### HACS
+
+Select the **Open in HACS** button above, or search HACS for **Print Handy**, then install it and restart Home Assistant.
+
+The default HACS listing is under review ([hacs/default#14124](https://github.com/hacs/default/pull/14124)). Until it appears in search, add it as a custom repository: in HACS, open the menu in the top right, choose **Custom repositories**, and add `https://github.com/catduckgnaf/ha-print-handy` with category **Integration**.
 
 ### Manual
 
@@ -113,6 +123,8 @@ Copy `custom_components/print_handy/` into your Home Assistant `config/custom_co
 The config entry migrates itself on the first start: entity and device registry rows are rewritten in place, so entity ids, history and automations are kept. Entity names now come from translations and icons from `icons.json`.
 
 ## Notes
+
+- The integration ships its own icon and logo in `custom_components/print_handy/brand/`. Home Assistant 2026.3 and newer show them on the integration card and in the device pages; older versions show a generic icon, because custom integrations' images now live with the integration instead of the shared brands repository.
 
 - Polling is read-only; commands are sent only when you press a control button, set a target temperature or call a service (spool, `send_gcode` or `exclude_object`), and only to Print Handy (never directly to a printer). Print Handy decides whether to honor them — its controls gate is off by default.
 - The access token or password is stored only in the config entry and sent only as the `X-WebUI-Token` header. Diagnostics downloads redact the URL, token and server host name.
