@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -24,16 +25,21 @@ from .const import (
     ISSUE_URL,
     PLATFORMS,
     SERVICE_ADD_SPOOL,
+    SERVICE_ARCHIVE_SPOOL,
     SERVICE_ASSIGN_SPOOL,
     SERVICE_EXCLUDE_OBJECT,
+    SERVICE_RENAME_SPOOL,
     SERVICE_SEND_GCODE,
+    SERVICE_SHELVE_SPOOL,
+    SERVICE_SWAP_NOZZLE,
     SERVICE_SWAP_SPOOLS,
     SERVICE_SYNC_SPOOLS,
     SERVICE_UNASSIGN_SPOOL,
+    SERVICE_UPLOAD_FILE,
     VERSION,
 )
 from .coordinator import PrintHandyDataUpdateCoordinator
-from .entity import async_ensure_instance_device
+from .entity import async_ensure_instance_device, instance_identifier
 from .repairs import async_sync_doctor_repairs
 
 LOGGER = logging.getLogger(__name__)
@@ -99,6 +105,35 @@ SERVICE_ADD_SCHEMA = _service_schema(
 SERVICE_SYNC_SCHEMA = _service_schema({})
 SERVICE_SEND_GCODE_SCHEMA = _service_schema({vol.Required("script"): _NON_EMPTY})
 SERVICE_EXCLUDE_OBJECT_SCHEMA = _service_schema({vol.Required("object"): _NON_EMPTY})
+SERVICE_RENAME_SPOOL_SCHEMA = _service_schema(
+    {
+        vol.Required("spool_id"): _SPOOL_ID,
+        vol.Required("nickname"): cv.string,
+    }
+)
+SERVICE_ARCHIVE_SPOOL_SCHEMA = _service_schema(
+    {
+        vol.Required("spool_id"): _SPOOL_ID,
+        vol.Optional("archived", default=True): cv.boolean,
+    }
+)
+SERVICE_SHELVE_SPOOL_SCHEMA = _service_schema(
+    {vol.Required("spool_id"): _SPOOL_ID}
+)
+SERVICE_SWAP_NOZZLE_SCHEMA = _service_schema(
+    {
+        vol.Required("diameter_mm"): vol.All(
+            vol.Coerce(float), vol.Range(min=0.1, max=2.0)
+        ),
+        vol.Required("nozzle_type"): _NON_EMPTY,
+    }
+)
+SERVICE_UPLOAD_FILE_SCHEMA = vol.Schema(
+    {
+        vol.Required("file_path"): _NON_EMPTY,
+        vol.Optional("device_id"): vol.All(cv.ensure_list, [cv.string]),
+    }
+)
 
 
 def _loaded_coordinators(hass: HomeAssistant) -> list[PrintHandyDataUpdateCoordinator]:
@@ -198,6 +233,54 @@ def _service(
     return _handler
 
 
+def _coordinator_for_upload(
+    hass: HomeAssistant, call: ServiceCall
+) -> PrintHandyDataUpdateCoordinator:
+    """Resolve the one coordinator an upload_file call targets.
+
+    The inbox is per instance, not per printer: a picked device may
+    be the instance device itself or any printer device of the
+    instance. Without a device, the call needs exactly one loaded
+    coordinator; otherwise it is ambiguous and refused by name.
+    """
+    device_ids = call.data.get("device_id") or []
+    if isinstance(device_ids, str):
+        device_ids = [device_ids]
+    if device_ids:
+        device_id = device_ids[0]
+        device = dr.async_get(hass).async_get(device_id)
+        if device is None:
+            raise HomeAssistantError(f"Device '{device_id}' does not exist")
+        for domain, identifier in device.identifiers:
+            if domain != DOMAIN:
+                continue
+            for coordinator in _loaded_coordinators(hass):
+                if identifier == instance_identifier(coordinator.instance_key):
+                    return coordinator
+                if identifier == f"{coordinator.instance_key}:instance":
+                    return coordinator
+        # A printer device of the instance resolves the same way.
+        coordinator, _printer_id = _target_for_device(hass, device_id)
+        return coordinator
+    coordinators = _loaded_coordinators(hass)
+    if len(coordinators) == 1:
+        return coordinators[0]
+    if not coordinators:
+        raise HomeAssistantError(
+            "No Print Handy instance is loaded; upload_file has nowhere to send the file"
+        )
+    raise HomeAssistantError(
+        "More than one Print Handy instance is loaded; pick a device "
+        "of the instance the file should go to, so the upload is not ambiguous"
+    )
+
+
+def _read_file_bytes(path: str) -> bytes:
+    """Read one file's bytes (run in the executor by the upload handler)."""
+    with open(path, "rb") as handle:
+        return handle.read()
+
+
 def _async_register_services(hass: HomeAssistant) -> None:
     """Register every service. Called from async_setup, once per instance.
 
@@ -247,11 +330,59 @@ def _async_register_services(hass: HomeAssistant) -> None:
             lambda c, p, call: c.async_exclude_object(p, call.data["object"]),
             SERVICE_EXCLUDE_OBJECT_SCHEMA,
         ),
+        SERVICE_RENAME_SPOOL: (
+            lambda c, p, call: c.async_rename_spool(
+                p, call.data["spool_id"], call.data["nickname"]
+            ),
+            SERVICE_RENAME_SPOOL_SCHEMA,
+        ),
+        SERVICE_ARCHIVE_SPOOL: (
+            lambda c, p, call: c.async_archive_spool(
+                p, call.data["spool_id"], call.data.get("archived", True)
+            ),
+            SERVICE_ARCHIVE_SPOOL_SCHEMA,
+        ),
+        SERVICE_SHELVE_SPOOL: (
+            lambda c, p, call: c.async_shelve_spool(p, call.data["spool_id"]),
+            SERVICE_SHELVE_SPOOL_SCHEMA,
+        ),
+        SERVICE_SWAP_NOZZLE: (
+            lambda c, p, call: c.async_swap_nozzle(
+                p, call.data["diameter_mm"], call.data["nozzle_type"]
+            ),
+            SERVICE_SWAP_NOZZLE_SCHEMA,
+        ),
     }
     for service, (action, schema) in handlers.items():
         hass.services.async_register(
             DOMAIN, service, _service(hass, action), schema=schema
         )
+
+    async def _upload_handler(call: ServiceCall) -> None:
+        file_path = str(call.data["file_path"])
+        coordinator = _coordinator_for_upload(hass, call)
+        basename = os.path.basename(file_path)
+        extension = os.path.splitext(basename)[1].lower()
+        if extension not in {".stl", ".3mf"}:
+            raise HomeAssistantError(
+                f"Only .stl and .3mf files can be uploaded to Print Handy; "
+                f"'{basename}' is not one of those"
+            )
+        try:
+            content = await hass.async_add_executor_job(_read_file_bytes, file_path)
+        except OSError as err:
+            raise HomeAssistantError(
+                f"Could not read the file to upload at '{file_path}': {err}"
+            ) from err
+        if not content:
+            raise HomeAssistantError(
+                f"The file to upload at '{file_path}' is empty"
+            )
+        await coordinator.async_upload_file(basename, content)
+
+    hass.services.async_register(
+        DOMAIN, SERVICE_UPLOAD_FILE, _upload_handler, schema=SERVICE_UPLOAD_FILE_SCHEMA
+    )
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:

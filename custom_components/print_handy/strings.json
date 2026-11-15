@@ -211,6 +211,104 @@
           "description": "Name of the object to exclude, exactly as the Current object sensor lists it."
         }
       }
+    },
+    "rename_spool": {
+      "name": "Rename spool",
+      "description": "Rename a spool by setting its nickname. An empty nickname clears it.",
+      "fields": {
+        "device_id": {
+          "name": "Printer device",
+          "description": "Pick the printer's device instead of typing its id. Several devices run the service on each."
+        },
+        "printer_id": {
+          "name": "Printer id",
+          "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
+        },
+        "spool_id": {
+          "name": "Spool",
+          "description": "Spoolman spool id to rename."
+        },
+        "nickname": {
+          "name": "Nickname",
+          "description": "New nickname for the spool. An empty value clears the nickname."
+        }
+      }
+    },
+    "archive_spool": {
+      "name": "Archive spool",
+      "description": "Archive a spool, or unarchive it when archived is false.",
+      "fields": {
+        "device_id": {
+          "name": "Printer device",
+          "description": "Pick the printer's device instead of typing its id. Several devices run the service on each."
+        },
+        "printer_id": {
+          "name": "Printer id",
+          "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
+        },
+        "spool_id": {
+          "name": "Spool",
+          "description": "Spoolman spool id to archive or unarchive."
+        },
+        "archived": {
+          "name": "Archived",
+          "description": "True to archive the spool, false to unarchive it."
+        }
+      }
+    },
+    "shelve_spool": {
+      "name": "Shelve spool",
+      "description": "Shelve a spool. The spool leaves its slot and goes back on the shelf.",
+      "fields": {
+        "device_id": {
+          "name": "Printer device",
+          "description": "Pick the printer's device instead of typing its id. Several devices run the service on each."
+        },
+        "printer_id": {
+          "name": "Printer id",
+          "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
+        },
+        "spool_id": {
+          "name": "Spool",
+          "description": "Spoolman spool id to shelve."
+        }
+      }
+    },
+    "upload_file": {
+      "name": "Upload file",
+      "description": "Upload a file to the Print Handy inbox. The file lands in the Print Handy inbox and is not a print.",
+      "fields": {
+        "device_id": {
+          "name": "Print Handy device",
+          "description": "Pick the Print Handy instance device or a printer device of the instance the file should go to. Optional when only one instance is loaded."
+        },
+        "file_path": {
+          "name": "File path",
+          "description": "Path to the .stl or .3mf file on the Home Assistant host to upload."
+        }
+      }
+    },
+    "swap_nozzle": {
+      "name": "Swap nozzle",
+      "description": "Record a nozzle change for one printer. This records a nozzle you have physically fitted; the guided flow stays in Print Handy chat and the Web UI.",
+      "fields": {
+        "device_id": {
+          "name": "Printer device",
+          "description": "Pick the printer's device instead of typing its id. Several devices run the service on each."
+        },
+        "printer_id": {
+          "name": "Printer id",
+          "description": "The Print Handy printer id, exactly as Print Handy names it. Alternatively pick the printer's device as the target."
+        },
+        "diameter_mm": {
+          "name": "Nozzle diameter",
+          "description": "Diameter of the fitted nozzle, in millimeters."
+        },
+        "nozzle_type": {
+          "name": "Nozzle type",
+          "description": "Type or material of the fitted nozzle."
+        }
+      }
     }
   },
   "entity": {
@@ -286,6 +384,21 @@
       },
       "faults": {
         "name": "Faults"
+      },
+      "nozzle_diameter": {
+        "name": "Nozzle diameter"
+      },
+      "nozzle_material": {
+        "name": "Nozzle material"
+      },
+      "nozzle_z_offset": {
+        "name": "Nozzle Z offset"
+      },
+      "nozzle_default": {
+        "name": "{material} nozzle default"
+      },
+      "bed_default": {
+        "name": "{material} bed default"
       }
     },
     "binary_sensor": {

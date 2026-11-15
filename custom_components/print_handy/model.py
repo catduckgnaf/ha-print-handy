@@ -152,6 +152,100 @@ class HmsError:
 
 
 @dataclass(frozen=True)
+class MaterialDefaults:
+    """One material family's default temperatures from the hardware facts.
+
+    Temperatures are in degrees Celsius, as Print Handy sends them;
+    a value the server does not record stays None, never guessed.
+    """
+
+    family: str
+    nozzle_c: float | None = None
+    bed_c: float | None = None
+    base_nozzle_c: float | None = None
+
+    @property
+    def slug(self) -> str:
+        """The family as a stable id fragment ("PLA +" -> "pla")."""
+        return re.sub(r"[^a-z0-9]+", "_", self.family.lower()).strip("_") or "material"
+
+
+@dataclass(frozen=True)
+class PrinterHardware:
+    """One printer's hardware facts (Print Handy #1548).
+
+    Mirrors the ``hardware`` object the per-printer status endpoint
+    carries as a sibling of ``status`` when the server knows the
+    printer's fitted nozzle and related calibration facts. Servers
+    without the contract omit the key entirely, so parsing yields
+    None and no nozzle entities are created.
+    """
+
+    source: str = ""
+    diameter_mm: float | None = None
+    nozzle_type: str = ""
+    type_note: str = ""
+    installed: str = ""
+    z_offset_mm: float | None = None
+    z_offset_verified: bool = False
+    temp_offset_c: float | None = None
+    max_c: float | None = None
+    calibration_pending: tuple[str, ...] = ()
+    bed_mesh_stale: bool = False
+    materials: tuple[MaterialDefaults, ...] = ()
+
+
+def _material_defaults(value: Any) -> tuple[MaterialDefaults, ...]:
+    """Parse the hardware facts' per-material default temperatures."""
+    if not isinstance(value, list):
+        return ()
+    materials: list[MaterialDefaults] = []
+    for row in value:
+        if not isinstance(row, dict) or not row.get("family"):
+            continue
+        materials.append(
+            MaterialDefaults(
+                family=str(row["family"]),
+                nozzle_c=_number(row.get("nozzle_c")),
+                bed_c=_number(row.get("bed_c")),
+                base_nozzle_c=_number(row.get("base_nozzle_c")),
+            )
+        )
+    return tuple(materials)
+
+
+def parse_hardware(raw: Any) -> PrinterHardware | None:
+    """Parse the ``hardware`` sibling of a printer status body.
+
+    Returns None when the key is absent or not an object (a server
+    that predates the #1548 contract), so callers can gate entity
+    creation on its presence alone.
+    """
+    if not isinstance(raw, dict):
+        return None
+    pending = raw.get("pending")
+    calibration_pending = (
+        tuple(str(item) for item in pending if isinstance(item, str) and item)
+        if isinstance(pending, list)
+        else ()
+    )
+    return PrinterHardware(
+        source=str(raw.get("source") or ""),
+        diameter_mm=_number(raw.get("diameter_mm")),
+        nozzle_type=str(raw.get("type") or ""),
+        type_note=str(raw.get("type_note") or ""),
+        installed=str(raw.get("installed") or ""),
+        z_offset_mm=_number(raw.get("z_offset_mm")),
+        z_offset_verified=raw.get("z_offset_verified") is True,
+        temp_offset_c=_number(raw.get("temp_offset_c")),
+        max_c=_number(raw.get("max_c")),
+        calibration_pending=calibration_pending,
+        bed_mesh_stale=raw.get("mesh_stale") is True,
+        materials=_material_defaults(raw.get("materials")),
+    )
+
+
+@dataclass(frozen=True)
 class PrinterStatus:
     """One printer's live status from GET /api/printers/<id>/status.
 
@@ -188,6 +282,9 @@ class PrinterStatus:
     # ``hms_errors`` stays None there and no fault entity is created.
     hms_errors: tuple[HmsError, ...] | None = None
     print_error_text: str = ""
+    # Hardware facts (Print Handy #1548): the ``hardware`` sibling of
+    # the status body; None on servers that do not send it.
+    hardware: PrinterHardware | None = None
 
     @property
     def unavailable(self) -> bool:
@@ -297,6 +394,7 @@ def parse_printer_status(raw: Any, printer_id: str = "") -> PrinterStatus:
         excluded_objects=_names(status.get("excluded_objects")),
         hms_errors=_hms_errors(status.get("hms_errors")),
         print_error_text=str(status.get("print_error_text") or ""),
+        hardware=parse_hardware(raw.get("hardware")),
     )
 
 
@@ -356,6 +454,7 @@ class SpoolSummary:
     remaining_percent: float | None = None
     archived: bool = False
     location: str | None = None
+    nickname: str = ""
 
 
 @dataclass(frozen=True)
@@ -416,6 +515,7 @@ def _parse_spool_summary(raw: Any) -> SpoolSummary | None:
         remaining_percent=_number(raw.get("remaining_percent")),
         archived=raw.get("archived") is True,
         location=str(location) if location else None,
+        nickname=str(raw.get("nickname") or ""),
     )
 
 
@@ -506,6 +606,8 @@ def slot_spool_attributes(view: PrinterSpools | None, slot: int) -> dict[str, An
             "location": spool.location,
         }
     )
+    if spool.nickname:
+        attrs["nickname"] = spool.nickname
     return attrs
 
 
@@ -515,7 +617,7 @@ SHELF_ATTRIBUTE_LIMIT = 40
 
 
 def _shelf_row(spool: SpoolSummary) -> dict[str, Any]:
-    return {
+    row: dict[str, Any] = {
         "id": spool.spool_id,
         "name": spool.name or None,
         "material": spool.material or None,
@@ -527,6 +629,9 @@ def _shelf_row(spool: SpoolSummary) -> dict[str, Any]:
         "remaining_percent": spool.remaining_percent,
         "location": spool.location,
     }
+    if spool.nickname:
+        row["nickname"] = spool.nickname
+    return row
 
 
 def shelf_spools(view: PrinterSpools | None) -> tuple[SpoolSummary, ...]:

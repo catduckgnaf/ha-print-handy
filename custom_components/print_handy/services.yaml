@@ -237,3 +237,160 @@ exclude_object:
       example: cube_1
       selector:
         text:
+rename_spool:
+  name: Rename spool
+  description: Rename a spool by setting its nickname. An empty nickname clears it.
+  fields:
+    device_id:
+      name: Printer device
+      description: Pick the printer's device instead of typing its id. Several devices run the service on each.
+      required: false
+      selector:
+        device:
+          integration: print_handy
+          multiple: true
+    printer_id:
+      name: Printer id
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it. Optional when you pick the printer's device as the target.
+      required: false
+      example: flashforge-ad5x
+      selector:
+        text:
+    spool_id:
+      name: Spool
+      description: Spoolman spool id to rename, as shown on the shelf and slot spool sensors.
+      required: true
+      example: 7
+      selector:
+        number:
+          min: 1
+          step: 1
+          mode: box
+    nickname:
+      name: Nickname
+      description: New nickname for the spool. An empty value clears the nickname.
+      required: true
+      example: Kitchen PLA
+      selector:
+        text:
+archive_spool:
+  name: Archive spool
+  description: Archive a spool, or unarchive it when archived is false. Archived spools leave the shelf.
+  fields:
+    device_id:
+      name: Printer device
+      description: Pick the printer's device instead of typing its id. Several devices run the service on each.
+      required: false
+      selector:
+        device:
+          integration: print_handy
+          multiple: true
+    printer_id:
+      name: Printer id
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it. Optional when you pick the printer's device as the target.
+      required: false
+      example: flashforge-ad5x
+      selector:
+        text:
+    spool_id:
+      name: Spool
+      description: Spoolman spool id to archive or unarchive.
+      required: true
+      example: 7
+      selector:
+        number:
+          min: 1
+          step: 1
+          mode: box
+    archived:
+      name: Archived
+      description: True to archive the spool, false to unarchive it. Defaults to true.
+      required: false
+      default: true
+      selector:
+        boolean:
+shelve_spool:
+  name: Shelve spool
+  description: Shelve a spool. The spool leaves its slot and goes back on the shelf.
+  fields:
+    device_id:
+      name: Printer device
+      description: Pick the printer's device instead of typing its id. Several devices run the service on each.
+      required: false
+      selector:
+        device:
+          integration: print_handy
+          multiple: true
+    printer_id:
+      name: Printer id
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it. Optional when you pick the printer's device as the target.
+      required: false
+      example: flashforge-ad5x
+      selector:
+        text:
+    spool_id:
+      name: Spool
+      description: Spoolman spool id to shelve, as shown on the slot spool sensors.
+      required: true
+      example: 7
+      selector:
+        number:
+          min: 1
+          step: 1
+          mode: box
+upload_file:
+  name: Upload file
+  description: Upload a file to the Print Handy inbox. The file lands in the Print Handy inbox and is not a print. Only .stl and .3mf files are accepted.
+  fields:
+    device_id:
+      name: Print Handy device
+      description: Pick the Print Handy instance device or a printer device of the instance the file should go to. Optional when only one Print Handy instance is loaded.
+      required: false
+      selector:
+        device:
+          integration: print_handy
+          multiple: false
+    file_path:
+      name: File path
+      description: Path to the .stl or .3mf file on the Home Assistant host to upload.
+      required: true
+      example: /config/www/model.stl
+      selector:
+        text:
+swap_nozzle:
+  name: Swap nozzle
+  description: Record a nozzle change for one printer. This records a nozzle you have physically fitted; the guided flow stays in Print Handy chat and the Web UI.
+  fields:
+    device_id:
+      name: Printer device
+      description: Pick the printer's device instead of typing its id. Several devices run the service on each.
+      required: false
+      selector:
+        device:
+          integration: print_handy
+          multiple: true
+    printer_id:
+      name: Printer id
+      description: The Print Handy printer id (for example flashforge-ad5x), exactly as Print Handy names it. Optional when you pick the printer's device as the target.
+      required: false
+      example: flashforge-ad5x
+      selector:
+        text:
+    diameter_mm:
+      name: Nozzle diameter
+      description: Diameter of the fitted nozzle, in millimeters.
+      required: true
+      example: 0.4
+      selector:
+        number:
+          min: 0.1
+          max: 2.0
+          step: 0.1
+          mode: box
+    nozzle_type:
+      name: Nozzle type
+      description: Type or material of the fitted nozzle (for example hardened_steel).
+      required: true
+      example: hardened_steel
+      selector:
+        text:

@@ -402,3 +402,58 @@ class PrintHandyDataUpdateCoordinator(DataUpdateCoordinator[Snapshot]):
         return await self._async_spool_call(
             printer_id, self.client.async_sync_spools(printer_id)
         )
+
+    async def async_rename_spool(
+        self, printer_id: str, spool_id: int, nickname: str
+    ) -> dict:
+        """Rename one spool through the API's edit action (issue #19)."""
+        return await self._async_spool_call(
+            printer_id,
+            self.client.async_rename_spool(printer_id, spool_id, nickname),
+        )
+
+    async def async_archive_spool(
+        self, printer_id: str, spool_id: int, archived: bool = True
+    ) -> dict:
+        """Archive or unarchive one spool through the edit action (#19)."""
+        return await self._async_spool_call(
+            printer_id,
+            self.client.async_archive_spool(printer_id, spool_id, archived),
+        )
+
+    async def async_shelve_spool(self, printer_id: str, spool_id: int) -> dict:
+        """Move one spool from its slot back to the shelf (issue #19)."""
+        return await self._async_spool_call(
+            printer_id, self.client.async_shelve_spool(printer_id, spool_id)
+        )
+
+    async def async_swap_nozzle(
+        self, printer_id: str, diameter_mm: float, nozzle_type: str
+    ) -> None:
+        """Record a nozzle change for one printer, failing visibly.
+
+        Mirrors async_send_gcode: a refusal from Print Handy, an
+        unreachable Web UI or a rejected token becomes a
+        HomeAssistantError carrying the server's reason; success
+        triggers a refresh.
+        """
+        try:
+            await self.client.async_record_nozzle_change(
+                printer_id, diameter_mm, nozzle_type
+            )
+        except PrintHandyApiError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self.async_request_refresh()
+
+    async def async_upload_file(self, filename: str, content: bytes) -> dict:
+        """Upload one file to the Print Handy inbox, failing visibly.
+
+        Instance-level: there is no printer and no refresh, because
+        the inbox is not part of the polled snapshot. Any client
+        failure becomes a HomeAssistantError carrying its reason.
+        """
+        try:
+            result = await self.client.async_upload_file(filename, content)
+        except PrintHandyApiError as err:
+            raise HomeAssistantError(str(err)) from err
+        return result if isinstance(result, dict) else {}

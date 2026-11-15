@@ -259,3 +259,78 @@ def test_unknown_spool_action_is_rejected_without_a_post():
     with pytest.raises(ValueError, match="unknown spool action"):
         asyncio.run(_client(session)._async_post_spool("ad5x", "explode"))
     assert session.calls == []
+
+
+def test_rename_spool_posts_edit_with_nickname():
+    """Rename POSTs {spool_id, nickname} to the edit endpoint (issue #19)."""
+    session = _Session({_spools_url("ad5x", "edit"): _FakeResponse(200, {"ok": True})})
+    asyncio.run(_client(session, token="sekrit").async_rename_spool("ad5x", 7, "Kitchen PLA"))
+    method, url, headers, body = session.calls[0]
+    assert method == "post"
+    assert url == _spools_url("ad5x", "edit")
+    assert headers == {"X-WebUI-Token": "sekrit"}
+    assert body == {"spool_id": 7, "nickname": "Kitchen PLA"}
+
+
+def test_archive_spool_posts_edit_with_archived_flag():
+    """Archive POSTs {spool_id, archived: true} to the edit endpoint."""
+    session = _Session({_spools_url("ad5x", "edit"): _FakeResponse(200, {"ok": True})})
+    asyncio.run(_client(session).async_archive_spool("ad5x", 7))
+    assert session.calls[0][1] == _spools_url("ad5x", "edit")
+    assert session.calls[0][3] == {"spool_id": 7, "archived": True}
+    session2 = _Session({_spools_url("ad5x", "edit"): _FakeResponse(200, {"ok": True})})
+    asyncio.run(_client(session2).async_archive_spool("ad5x", 7, archived=False))
+    assert session2.calls[0][3] == {"spool_id": 7, "archived": False}
+
+
+def test_edit_refusal_carries_the_server_reason():
+    """A refusal {ok: false, reason} on edit raises the spool refusal."""
+    body = {"ok": False, "reason": "spool controls are disabled"}
+    session = _Session({_spools_url("ad5x", "edit"): _FakeResponse(403, body)})
+    with pytest.raises(api.PrintHandySpoolRefusedError) as excinfo:
+        asyncio.run(_client(session).async_rename_spool("ad5x", 7, "x"))
+    assert "spool controls are disabled" in str(excinfo.value)
+
+
+def test_shelve_spool_unassigns_the_holding_slot():
+    """Shelving spool 3 (in slot 2 of SPOOLS_BODY) unassigns slot 2."""
+    session = _Session(
+        {
+            _spools_url("ad5x"): _FakeResponse(200, SPOOLS_BODY),
+            _spools_url("ad5x", "unassign"): _FakeResponse(200, {"ok": True}),
+        }
+    )
+    asyncio.run(_client(session).async_shelve_spool("ad5x", 3))
+    posts = [call for call in session.calls if call[0] == "post"]
+    assert len(posts) == 1
+    assert posts[0][1] == _spools_url("ad5x", "unassign")
+    assert posts[0][3] == {"slot": 2}
+
+
+def test_shelve_a_shelf_spool_is_refused():
+    """Shelving a spool already on the shelf (id 7) is refused by name."""
+    session = _Session({_spools_url("ad5x"): _FakeResponse(200, SPOOLS_BODY)})
+    with pytest.raises(api.PrintHandySpoolRefusedError, match="already on the shelf"):
+        asyncio.run(_client(session).async_shelve_spool("ad5x", 7))
+
+
+def test_shelve_an_unknown_spool_is_refused():
+    """Shelving a spool the server does not report is refused by name."""
+    session = _Session({_spools_url("ad5x"): _FakeResponse(200, SPOOLS_BODY)})
+    with pytest.raises(api.PrintHandySpoolRefusedError, match="no such spool"):
+        asyncio.run(_client(session).async_shelve_spool("ad5x", 999))
+
+
+def test_shelve_an_archived_spool_is_refused():
+    """Shelving an archived spool names that it is archived."""
+    import copy
+
+    body = copy.deepcopy(SPOOLS_BODY)
+    body["spools"] = [
+        {**body["shelf"][0], "archived": True},
+    ]
+    body["shelf"] = []
+    body["slots"] = [{"slot": 1, "spool": None}]
+    session = _Session({_spools_url("ad5x"): _FakeResponse(200, body)})
+    with pytest.raises(api.PrintHandySpoolRefusedError, match="archived"):
+        asyncio.run(_client(session).async_shelve_spool("ad5x", 7))
