@@ -144,6 +144,31 @@ class FakeClient:
         """Async sync spools."""
         return await self._spool(printer_id, "sync")
 
+    async def async_rename_spool(self, printer_id, spool_id, nickname):
+        """Async rename spool."""
+        return await self._spool(printer_id, "rename", spool_id, nickname)
+
+    async def async_archive_spool(self, printer_id, spool_id, archived=True):
+        """Async archive spool."""
+        return await self._spool(printer_id, "archive", spool_id, archived)
+
+    async def async_shelve_spool(self, printer_id, spool_id):
+        """Async shelve spool."""
+        return await self._spool(printer_id, "shelve", spool_id)
+
+    async def async_record_nozzle_change(self, printer_id, diameter_mm, nozzle_type):
+        """Async record nozzle change."""
+        self.world.controls.append((printer_id, "nozzle", diameter_mm, nozzle_type))
+        if self.world.control_error is not None:
+            raise self.world.control_error
+
+    async def async_upload_file(self, filename, content):
+        """Async upload file."""
+        self.world.controls.append(("upload", filename, len(content)))
+        if self.world.control_error is not None:
+            raise self.world.control_error
+        return {"ok": True, "filename": filename}
+
 
 def patched(world: World):
     """Patch the coordinator's client class to serve ``world``."""

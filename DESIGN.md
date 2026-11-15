@@ -423,6 +423,70 @@ side script reading Print Handy's API directly.
   endpoint; `/api/data` is year aggregates over its print records. A
   recent-jobs sensor waits on a server endpoint for it.
 
+### 3.8 Shipped in 0.7.0 (issue #19, against the #1548 companion contract)
+
+Three upstream asks were filed as Print Handy #1548; the HA side is
+built against that contract now and degrades visibly until the
+server side lands:
+
+1. `POST /api/upload` — header-token multipart inbox upload (one
+   `file` part).
+2. A `hardware` object in `GET /api/printers/<id>/status`, as a
+   sibling of `status`, mirroring the Web UI dashboard's
+   `hardware_facts` dict (source, diameter, type, install date,
+   Z offset and its verified flag, temperature offset and ceiling,
+   pending calibrations, mesh staleness, and per-material default
+   temperatures).
+3. `POST /api/printers/<id>/nozzle` with `{diameter_mm, type}` —
+   records a nozzle change, controls-gated.
+
+| Entity / service | Type | Source / action |
+|---|---|---|
+| Nozzle diameter | sensor (length, mm, measurement) | hardware `diameter_mm`; attributes: source, material, installed, temp_offset_c, max_c, z_offset_verified, calibration_pending, bed_mesh_stale |
+| Nozzle material | sensor | hardware `type`, underscores shown as spaces |
+| Nozzle Z offset | sensor (length, mm, measurement) | hardware `z_offset_mm` |
+| {material} nozzle default / bed default | sensor (temperature, measurement) | per family in hardware `materials`: `nozzle_c` / `bed_c` |
+| `print_handy.rename_spool` | service | `POST .../spools/edit` with `{spool_id, nickname}` (empty clears) |
+| `print_handy.archive_spool` | service | `POST .../spools/edit` with `{spool_id, archived}` |
+| `print_handy.shelve_spool` | service | the unassign of the slot holding the spool, resolved from the spools view; a shelf, archived or unknown spool is refused by name |
+| `print_handy.swap_nozzle` | service | `POST /api/printers/<id>/nozzle` with `{diameter_mm, type}`; records a nozzle the user has physically fitted — the guided flow stays in Print Handy chat and the Web UI |
+| `print_handy.upload_file` | service | `POST /api/upload` multipart; instance-level (the inbox is per instance), reads a `.stl` / `.3mf` file from the HA host |
+
+Design choices, recorded:
+
+- **No upstream work was needed for the spool services.** The
+  spool API's `edit` action already accepts `{spool_id, nickname}`
+  (stored per spool as `ph_nickname`) and `{spool_id, archived}`;
+  0.4.0 simply had not exposed it (§3.4). 0.7.0 adds `edit` to
+  `SPOOL_ACTIONS` and builds rename and archive on it. Shelve is a
+  client-side composition: read the spools view, unassign the slot
+  that holds the spool, and refuse by name when there is no such
+  slot move to make. A spool's nickname, when the view carries
+  one, rides as an attribute on the slot sensor and the shelf rows.
+- **Hardware facts gate everything nozzle.** Servers without the
+  contract omit the `hardware` key; parsing yields None and no
+  nozzle or material-default entities are created. The diameter,
+  material and Z offset sensors join `PRINTER_SENSORS` with
+  `present_fn` gating on the hardware fields; the per-family
+  defaults are dynamic entities, one nozzle and one bed sensor per
+  family, because the family list is data, not a fixed vocabulary.
+- **Upload and swap fail visibly until #1548 lands.** On current
+  servers both calls answer 404; the client surfaces the server's
+  reason (the upload error also notes the server may predate the
+  upload endpoint), the coordinator wraps it as a
+  `HomeAssistantError` carrying that reason, and nothing appears
+  to succeed. Upload is not a per-printer service: it registers
+  with its own handler and schema, resolves its instance from a
+  picked device (the instance device or any printer device of the
+  instance) or from being the only loaded instance, and validates
+  the file (extension, readability, non-empty) before sending.
+- **Failure contract unchanged.** Spool services run through the
+  coordinator's spool path (a refusal becomes a
+  `HomeAssistantError` and a success forces a spools re-read);
+  `swap_nozzle` mirrors `send_gcode` (control refusal, refresh on
+  success); `upload_file` wraps client errors as
+  `HomeAssistantError` with no printer and no refresh.
+
 ## 4. The gap, precisely — closed, except the thumbnail
 
 Nothing in this repo could manufacture the phase-2 entities: the data

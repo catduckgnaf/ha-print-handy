@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -13,7 +14,13 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import PERCENTAGE, UnitOfMass, UnitOfTemperature, UnitOfTime
+from homeassistant.const import (
+    PERCENTAGE,
+    UnitOfLength,
+    UnitOfMass,
+    UnitOfTemperature,
+    UnitOfTime,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -235,6 +242,44 @@ PRINTER_SENSORS: tuple[PrintHandyPrinterSensorEntityDescription, ...] = (
         value_fn=lambda status: status.current_object,
         present_fn=lambda status: bool(status.objects or status.current_object),
     ),
+    # Nozzle hardware facts (issue #19, Print Handy #1548): present
+    # only when the status carries a hardware block with the field.
+    PrintHandyPrinterSensorEntityDescription(
+        key="nozzle_diameter",
+        translation_key="nozzle_diameter",
+        native_unit_of_measurement=UnitOfLength.MILLIMETERS,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda status: (
+            status.hardware.diameter_mm if status.hardware is not None else None
+        ),
+        present_fn=lambda status: (
+            status.hardware is not None and status.hardware.diameter_mm is not None
+        ),
+    ),
+    PrintHandyPrinterSensorEntityDescription(
+        key="nozzle_material",
+        translation_key="nozzle_material",
+        value_fn=lambda status: (
+            status.hardware.nozzle_type.replace("_", " ")
+            if status.hardware is not None and status.hardware.nozzle_type
+            else None
+        ),
+        present_fn=lambda status: (
+            status.hardware is not None and bool(status.hardware.nozzle_type)
+        ),
+    ),
+    PrintHandyPrinterSensorEntityDescription(
+        key="nozzle_z_offset",
+        translation_key="nozzle_z_offset",
+        native_unit_of_measurement=UnitOfLength.MILLIMETERS,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda status: (
+            status.hardware.z_offset_mm if status.hardware is not None else None
+        ),
+        present_fn=lambda status: (
+            status.hardware is not None and status.hardware.z_offset_mm is not None
+        ),
+    ),
 )
 
 async def async_setup_entry(
@@ -271,6 +316,18 @@ async def async_setup_entry(
                 for description in PRINTER_SENSORS
                 if description.present_fn is None or description.present_fn(status)
             )
+            if status.hardware is not None:
+                for material in status.hardware.materials:
+                    entities.append(
+                        PrintHandyPrinterMaterialDefaultSensor(
+                            coordinator, entry, printer, material.family, "nozzle"
+                        )
+                    )
+                    entities.append(
+                        PrintHandyPrinterMaterialDefaultSensor(
+                            coordinator, entry, printer, material.family, "bed"
+                        )
+                    )
             if has_ams_filament(status):
                 entities.append(
                     PrintHandyPrinterFilamentSensor(coordinator, entry, printer)
@@ -352,6 +409,25 @@ class PrintHandyPrinterStatusSensor(PrintHandyPrinterEntity, SensorEntity):
         status = self.status
         if status is None:
             return {}
+        if self.entity_description.key == "nozzle_diameter":
+            hardware = status.hardware
+            if hardware is None:
+                return {}
+            attrs: dict[str, Any] = {}
+            if hardware.source:
+                attrs["source"] = hardware.source
+            if hardware.nozzle_type:
+                attrs["material"] = hardware.nozzle_type.replace("_", " ")
+            if hardware.installed:
+                attrs["installed"] = hardware.installed
+            if hardware.temp_offset_c is not None:
+                attrs["temp_offset_c"] = hardware.temp_offset_c
+            if hardware.max_c is not None:
+                attrs["max_c"] = hardware.max_c
+            attrs["z_offset_verified"] = hardware.z_offset_verified
+            attrs["calibration_pending"] = list(hardware.calibration_pending)
+            attrs["bed_mesh_stale"] = hardware.bed_mesh_stale
+            return attrs
         if self.entity_description.key == "current_object":
             return {
                 "objects": list(status.objects),
@@ -365,6 +441,51 @@ class PrintHandyPrinterStatusSensor(PrintHandyPrinterEntity, SensorEntity):
         if status.detail:
             attrs["detail"] = status.detail
         return attrs
+
+
+class PrintHandyPrinterMaterialDefaultSensor(PrintHandyPrinterEntity, SensorEntity):
+    """One material family's default temperature from the hardware facts.
+
+    Created per family in the printer's hardware materials list, one
+    for the nozzle default and one for the bed default (issue #19).
+    The value is Print Handy's recorded default for that family on
+    this printer's fitted nozzle, never estimated.
+    """
+
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _requires_live_status = True
+
+    def __init__(
+        self,
+        coordinator: PrintHandyDataUpdateCoordinator,
+        entry: PrintHandyConfigEntry,
+        printer: PrinterInfo,
+        family: str,
+        kind: str,
+    ) -> None:
+        """Initialize."""
+        super().__init__(coordinator, entry, printer)
+        self._family = family
+        self._kind = kind
+        slug = re.sub(r"[^a-z0-9]+", "_", family.lower()).strip("_") or "material"
+        self._attr_translation_key = "nozzle_default" if kind == "nozzle" else "bed_default"
+        self._attr_translation_placeholders = {"material": family}
+        self._attr_unique_id = printer_unique_id(
+            coordinator, printer.printer_id, f"{kind}_default_{slug}"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        """The family's nozzle or bed default for this printer, or None."""
+        status = self.status
+        if status is None or status.hardware is None:
+            return None
+        for material in status.hardware.materials:
+            if material.family == self._family:
+                return material.nozzle_c if self._kind == "nozzle" else material.bed_c
+        return None
 
 
 class PrintHandyPrinterFilamentSensor(PrintHandyPrinterEntity, SensorEntity):

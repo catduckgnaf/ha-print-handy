@@ -4,7 +4,7 @@ from homeassistant.const import Platform
 
 NAME = "Print Handy"
 DOMAIN = "print_handy"
-VERSION = "0.6.3"
+VERSION = "0.7.0"
 ATTRIBUTION = "Data provided by Print Handy"
 ISSUE_URL = "https://github.com/catduckgnaf/ha-print-handy/issues"
 
@@ -85,6 +85,14 @@ PRINTER_FIRMWARE_RESTART_PATH = "/api/printers/{printer_id}/firmware_restart"
 PRINTER_SERVER_RESTART_PATH = "/api/printers/{printer_id}/server_restart"
 PRINTER_GCODE_PATH = "/api/printers/{printer_id}/gcode"
 PRINTER_EXCLUDE_PATH = "/api/printers/{printer_id}/exclude"
+# Issue #19 companion contract (Print Handy #1548): record a nozzle
+# change the user has physically fitted, controls-gated like the
+# other control POSTs.
+PRINTER_NOZZLE_PATH = "/api/printers/{printer_id}/nozzle"
+# Issue #19 companion contract (Print Handy #1548): header-token
+# multipart upload into the Print Handy inbox.
+UPLOAD_PATH = "/api/upload"
+UPLOAD_TIMEOUT = 120
 
 # The control actions the button platform exposes, by button key.
 CONTROL_PATHS = {
@@ -116,9 +124,10 @@ DEFAULT_HEATER_MAX = {"nozzle": 350.0, "bed": 150.0}
 PRINTER_SPOOLS_PATH = "/api/printers/{printer_id}/spools"
 PRINTER_SPOOL_ACTION_PATH = "/api/printers/{printer_id}/spools/{action}"
 
-# The spool actions this integration exposes (the API's ``edit`` and
-# purchase actions are not exposed as services in 0.4.0).
-SPOOL_ACTIONS = ("assign", "swap", "unassign", "add", "sync")
+# The spool actions this integration exposes. The API's ``edit``
+# action backs the rename, archive and shelve services (issue #19);
+# the purchase actions are not exposed.
+SPOOL_ACTIONS = ("assign", "swap", "unassign", "add", "sync", "edit")
 
 # Service names (services.yaml documents the fields and selectors).
 SERVICE_ASSIGN_SPOOL = "assign_spool"
@@ -126,6 +135,11 @@ SERVICE_SWAP_SPOOLS = "swap_spools"
 SERVICE_UNASSIGN_SPOOL = "unassign_spool"
 SERVICE_ADD_SPOOL = "add_spool"
 SERVICE_SYNC_SPOOLS = "sync_spools"
+SERVICE_RENAME_SPOOL = "rename_spool"
+SERVICE_ARCHIVE_SPOOL = "archive_spool"
+SERVICE_SHELVE_SPOOL = "shelve_spool"
+SERVICE_UPLOAD_FILE = "upload_file"
+SERVICE_SWAP_NOZZLE = "swap_nozzle"
 
 SPOOL_SERVICES = (
     SERVICE_ASSIGN_SPOOL,
@@ -133,6 +147,9 @@ SPOOL_SERVICES = (
     SERVICE_UNASSIGN_SPOOL,
     SERVICE_ADD_SPOOL,
     SERVICE_SYNC_SPOOLS,
+    SERVICE_RENAME_SPOOL,
+    SERVICE_ARCHIVE_SPOOL,
+    SERVICE_SHELVE_SPOOL,
 )
 
 # Issue-#1 remainder services (0.5.0), on the control API above.
@@ -142,6 +159,7 @@ SERVICE_EXCLUDE_OBJECT = "exclude_object"
 CONTROL_SERVICES = (
     SERVICE_SEND_GCODE,
     SERVICE_EXCLUDE_OBJECT,
+    SERVICE_SWAP_NOZZLE,
 )
 
 ATTR_ATTRIBUTION = "attribution"

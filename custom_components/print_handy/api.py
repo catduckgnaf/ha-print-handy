@@ -59,6 +59,7 @@ from .const import (
     PRINTER_CAMERA_PATH,
     PRINTER_EXCLUDE_PATH,
     PRINTER_GCODE_PATH,
+    PRINTER_NOZZLE_PATH,
     PRINTER_SPOOL_ACTION_PATH,
     PRINTER_SPOOLS_PATH,
     PRINTER_STATUS_PATH,
@@ -68,6 +69,8 @@ from .const import (
     ROSTER_PATH,
     STATUS_PATH,
     TOKEN_HEADER,
+    UPLOAD_PATH,
+    UPLOAD_TIMEOUT,
 )
 from .model import (
     PrinterSpools,
@@ -751,3 +754,178 @@ class PrintHandyApiClient:
         sent ``{}``.
         """
         return await self._async_post_spool(printer_id, "sync", {})
+
+    async def async_edit_spool(
+        self, printer_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """POST edit: change fields on one spool record (issue #19).
+
+        Internal helper for the rename and archive actions; the
+        server's edit action accepts per-spool fields such as
+        ``nickname`` (stored as ``ph_nickname``) and ``archived``.
+        Refusals raise PrintHandySpoolRefusedError.
+        """
+        return await self._async_post_spool(printer_id, "edit", body)
+
+    async def async_rename_spool(
+        self, printer_id: str, spool_id: int, nickname: str
+    ) -> dict[str, Any]:
+        """POST edit with a nickname: rename one spool (issue #19).
+
+        An empty nickname clears the spool's nickname on the server.
+        """
+        return await self.async_edit_spool(
+            printer_id, {"spool_id": int(spool_id), "nickname": nickname}
+        )
+
+    async def async_archive_spool(
+        self, printer_id: str, spool_id: int, archived: bool = True
+    ) -> dict[str, Any]:
+        """POST edit with the archived flag: archive or unarchive a spool."""
+        return await self.async_edit_spool(
+            printer_id, {"spool_id": int(spool_id), "archived": bool(archived)}
+        )
+
+    async def async_shelve_spool(
+        self, printer_id: str, spool_id: int
+    ) -> dict[str, Any]:
+        """Move one spool from its slot back to the shelf (issue #19).
+
+        Shelving is not a server action of its own: it is the
+        unassign of whichever slot currently holds the spool. The
+        spools view decides: a spool in a slot is unassigned from
+        that slot; a spool already on the shelf, an archived spool,
+        or a spool the server does not report at all is refused with
+        a named reason, matching the spool refusal contract.
+        """
+        view = await self.async_get_printer_spools(printer_id)
+        if not view.available:
+            raise PrintHandySpoolRefusedError(
+                view.detail
+                or f"Print Handy cannot serve the spools view for printer '{printer_id}'"
+            )
+        for row in view.slots:
+            if row.spool is not None and row.spool.spool_id == int(spool_id):
+                return await self.async_unassign_spool(printer_id, row.slot)
+        for spool in view.spools:
+            if spool.spool_id == int(spool_id):
+                if spool.archived:
+                    raise PrintHandySpoolRefusedError(
+                        f"Spool {int(spool_id)} is archived; unarchive it first"
+                    )
+                raise PrintHandySpoolRefusedError(
+                    f"Spool {int(spool_id)} is already on the shelf"
+                )
+        # Also check the shelf list directly, in case the server's
+        # combined spools list omits shelf rows.
+        for spool in view.shelf:
+            if spool.spool_id == int(spool_id):
+                if spool.archived:
+                    raise PrintHandySpoolRefusedError(
+                        f"Spool {int(spool_id)} is archived; unarchive it first"
+                    )
+                raise PrintHandySpoolRefusedError(
+                    f"Spool {int(spool_id)} is already on the shelf"
+                )
+        raise PrintHandySpoolRefusedError(
+            f"Print Handy reports no such spool: {int(spool_id)}"
+        )
+
+    async def async_record_nozzle_change(
+        self, printer_id: str, diameter_mm: float, nozzle_type: str
+    ) -> None:
+        """POST a nozzle change record for one printer (issue #19, #1548).
+
+        Records a nozzle the user has physically fitted; the guided
+        flow stays in Print Handy. Controls-gated on the server, so
+        refusals raise PrintHandyControlRefusedError carrying the
+        server's reason, exactly like the other control POSTs. On
+        servers that predate the contract this answers 404 and the
+        refusal names it.
+        """
+        path = PRINTER_NOZZLE_PATH.format(printer_id=quote(printer_id, safe=""))
+        await self._async_post_control(
+            f"{self.base_url}{path}",
+            f"recording a nozzle change for printer '{printer_id}'",
+            {"diameter_mm": float(diameter_mm), "type": nozzle_type},
+        )
+
+    async def async_upload_file(
+        self, filename: str, content: bytes
+    ) -> dict[str, Any]:
+        """POST one file to the Print Handy inbox (issue #19, #1548).
+
+        Multipart upload to ``POST /api/upload`` with the same header
+        token as every other call. The file lands in the Print Handy
+        inbox; it is not a print. On servers that predate the upload
+        endpoint this answers 404, and the error carries the server's
+        reason when it sent one (or notes that the server may predate
+        the endpoint). Auth, rate-limit and host refusals map exactly
+        like the camera snapshot read.
+        """
+        try:
+            import aiohttp
+        except ImportError as err:  # pragma: no cover - HA always ships aiohttp
+            raise PrintHandyApiError(
+                "aiohttp is required to upload a file to Print Handy"
+            ) from err
+        form = aiohttp.FormData()
+        form.add_field("file", content, filename=filename)
+        url = f"{self.base_url}{UPLOAD_PATH}"
+        try:
+            async with asyncio.timeout(UPLOAD_TIMEOUT):
+                async with self._session.post(
+                    url, headers=self._headers(), data=form
+                ) as response:
+                    status = response.status
+                    try:
+                        body = await response.json()
+                    except Exception:  # a body we cannot decode is no body
+                        # The camera path reads raw bytes for its error
+                        # body; here a non-JSON error body names no reason.
+                        body = None
+                    # Some duck-typed sessions expose read() instead of
+                    # a parsed body on error; json() above is the norm.
+                    retry_after = _retry_after(
+                        getattr(response, "headers", None)
+                    )
+        except PrintHandyApiError:
+            raise
+        except TimeoutError as err:
+            raise PrintHandyConnectionError(
+                f"The Print Handy Web UI at {self.base_url} did not answer "
+                f"within {UPLOAD_TIMEOUT} seconds"
+            ) from err
+        except Exception as err:  # transport failure of any flavor
+            raise PrintHandyConnectionError(
+                f"Could not reach the Print Handy Web UI at {self.base_url}: "
+                f"{err or type(err).__name__}"
+            ) from err
+        if status == 401:
+            raise PrintHandyAuthError(
+                "Print Handy Web UI rejected the access token"
+            )
+        if status == 429:
+            wait = retry_after or DEFAULT_RETRY_AFTER
+            raise PrintHandyRateLimitedError(
+                "Print Handy is rate-limiting this client after failed access "
+                f"attempts; waiting {wait} seconds before trying again",
+                wait,
+            )
+        if status == 403:
+            raise PrintHandyHostRefusedError(HOST_REFUSED_MESSAGE)
+        if 200 <= status < 300:
+            return body if isinstance(body, dict) else {}
+        reason = _reason(body)
+        if status == 404:
+            detail = f": {reason}" if reason else ""
+            raise PrintHandyApiError(
+                f"Print Handy Web UI returned HTTP 404 for the upload of "
+                f"'{filename}'{detail}; the server may predate the upload "
+                "endpoint (Print Handy #1548)"
+            )
+        detail = f": {reason}" if reason else ""
+        raise PrintHandyApiError(
+            f"Print Handy Web UI returned HTTP {status} for the upload "
+            f"of '{filename}'{detail}"
+        )
