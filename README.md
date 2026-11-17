@@ -115,7 +115,7 @@ The integration talks to a running Print Handy. On **Home Assistant OS**, instal
 
 Select the **Open in HACS** button above, or search HACS for **Print Handy**, then install it and restart Home Assistant.
 
-The default HACS listing is under review ([hacs/default#14124](https://github.com/hacs/default/pull/14124)). Until it appears in search, add it as a custom repository: in HACS, open the menu in the top right, choose **Custom repositories**, and add `https://github.com/catduckgnaf/ha-print-handy` with category **Integration**.
+Print Handy is in the HACS default list since 17 Nov 2026 ([hacs/default#14124](https://github.com/hacs/default/pull/14124)). A new listing can take up to 8 hours to show in HACS search.
 
 ### Manual
 
@@ -138,7 +138,7 @@ The config entry migrates itself on the first start: entity and device registry 
 - The integration ships its own icon and logo in `custom_components/print_handy/brand/`. Home Assistant 2026.3 and newer show them on the integration card and in the device pages; older versions show a generic icon, because custom integrations' images now live with the integration instead of the shared brands repository.
 
 - Polling is read-only; commands are sent only when you press a control button, set a target temperature or call a service (spool, `send_gcode` or `exclude_object`), and only to Print Handy (never directly to a printer). Print Handy decides whether to honor them — its controls gate is off by default.
-- The access token or password is stored only in the config entry and sent only as the `X-WebUI-Token` header. Diagnostics downloads redact the URL, token and server host name.
+- The access token or password is stored only in the config entry and sent only as the `X-WebUI-Token` header. Diagnostics downloads redact the URL, token, server host name and each printer's camera snapshot URL.
 - Temperature number maximums are the per-heater ceilings Print Handy reports for each printer (#1400), the same values its control routes refuse above. Against an older Print Handy they fall back to 0-350 (nozzle) and 0-150 (bed); Print Handy and the printer refuse out-of-range values either way.
 - Print Handy's optional MQTT events (`print-handy/<event>`) work unchanged alongside this integration for automations that only need print started/finished notifications today.
 
