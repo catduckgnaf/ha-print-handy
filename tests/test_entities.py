@@ -359,6 +359,33 @@ async def test_diagnostics_redact_addresses_and_token(hass: HomeAssistant):
     assert data["snapshot"]["printers"]
 
 
+async def test_diagnostics_redact_the_camera_snapshot_url(hass: HomeAssistant):
+    """A camera URL, with its address and any credentials, never reaches diagnostics."""
+    camera_url = "http://viewer:cam-pass@camera.local/snapshot.jpg"
+    world = World(rows=[{**MOONRAKER_ROW, "camera_snapshot_url": camera_url}])
+    entry = await _setup(hass, world)
+    world.hub_error = None
+    assert entry.runtime_data.data.printers[0].camera_snapshot_url == camera_url
+    data = await async_get_config_entry_diagnostics(hass, entry)
+    text = str(data)
+    assert "camera.local" not in text
+    assert "cam-pass" not in text
+    assert data["snapshot"]["printers"][0]["camera_snapshot_url"] == REDACTED
+
+
+async def test_diagnostics_redact_inside_the_printer_and_doctor_rows(hass: HomeAssistant):
+    """Keys inside the snapshot's tuple fields are redacted like top-level ones."""
+    doctor = [{"label": "Moonraker", "status": "fail",
+               "detail": "cannot reach http://doctor-detail.local:7125"}]
+    world = World(doctor=doctor)
+    entry = await _setup(hass, world)
+    world.hub_error = None
+    data = await async_get_config_entry_diagnostics(hass, entry)
+    assert "doctor-detail.local" not in str(data)
+    for row in data["snapshot"]["printers"]:
+        assert row["listener_reason"] in ("", REDACTED)
+
+
 async def test_device_removal_only_once_the_printer_left_the_roster(hass: HomeAssistant):
     """Device removal only once the printer left the roster."""
     entry = await _setup(hass, World(rows=[MOONRAKER_ROW, BAMBU_ROW]))

@@ -23,6 +23,9 @@ TO_REDACT = {
     CONF_SERVER_ID,
     "host",
     "spoolman_url",
+    # A camera URL often carries the camera's address and, for many
+    # cameras, a user name and password in the URL itself.
+    "camera_snapshot_url",
     "detail",
     "listener_reason",
     # The chat account the bot signs in as.
@@ -32,6 +35,21 @@ TO_REDACT = {
 }
 
 REDACTED = "**REDACTED**"
+
+
+def _lists(value: Any) -> Any:
+    """Turn tuples into lists, recursively.
+
+    ``dataclasses.asdict`` keeps the snapshot's tuple fields (the printer
+    roster, the doctor rows) as tuples, and ``async_redact_data`` only
+    walks dicts and lists, so without this every key inside them, the
+    camera URL and the doctor details included, went out unredacted.
+    """
+    if isinstance(value, dict):
+        return {key: _lists(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_lists(item) for item in value]
+    return value
 
 
 def _scrub(text: str | None, secrets: list[str]) -> str | None:
@@ -83,7 +101,7 @@ async def async_get_config_entry_diagnostics(
             "roster_supported": coordinator.roster_supported,
         },
         "snapshot": (
-            async_redact_data(dataclasses.asdict(snapshot), TO_REDACT)
+            async_redact_data(_lists(dataclasses.asdict(snapshot)), TO_REDACT)
             if snapshot is not None
             else None
         ),
