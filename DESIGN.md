@@ -93,7 +93,7 @@ Every printer adapter implements `normalize_status(raw)` → a common dict
 States seen across adapters: standby, printing, paused, complete, error,
 cancelled, unknown. Print Handy also *controls* printers internally
 (Moonraker `POST /printer/print/pause|resume|cancel` via
-`print_handy/hermes/print_control.py` and `family_control.py`, behind its
+`print_handy/runtime/print_control.py` and `family_control.py`, behind its
 chat confirmation flow) — none of that is reachable over HTTP today.
 
 ## 2. Transport decision

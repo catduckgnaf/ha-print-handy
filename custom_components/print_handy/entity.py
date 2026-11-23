@@ -62,6 +62,8 @@ def async_add_entities_as_known(
     entry: PrintHandyConfigEntry,
     async_add_entities: AddEntitiesCallback,
     build: Callable[[], Iterable[Entity]],
+    *,
+    prune: Callable[[set[str]], None] | None = None,
 ) -> None:
     """Add a platform's entities now and as the coordinator learns of more.
 
@@ -74,6 +76,10 @@ def async_add_entities_as_known(
 
     @callback
     def _add_new() -> None:
+        # Remove entities retired by the server before adding newly reported
+        # ones. The same set must forget removed IDs so they can reappear.
+        if prune is not None:
+            prune(added)
         new: list[Entity] = []
         for entity in build():
             unique_id = entity.unique_id
