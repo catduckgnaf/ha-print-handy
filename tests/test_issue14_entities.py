@@ -122,6 +122,36 @@ async def test_repairs_issue_follows_doctor_failures(hass: HomeAssistant):
     assert not any("orca_cli" in issue_id for _, issue_id in issues)
 
 
+async def test_doctor_checks_retired_from_snapshot_are_pruned_and_can_return(hass: HomeAssistant):
+    """The registry must not retain vanished doctor checks across updates."""
+    world = World()
+    world.doctor = DOCTOR
+    entry = await _setup(hass, world)
+    coordinator = entry.runtime_data
+    suffix = ":instance:doctor:orca_cli"
+    original = _entity_id(hass, entry, "binary_sensor", suffix)
+    assert original is not None
+
+    # A successful full hub poll with no such check must remove its registry
+    # entry, not leave an 'unknown' sensor indefinitely.
+    world.doctor = []
+    clock = Clock()
+    clock.advance(301)
+    with patched(world), patch(CLOCK_PATH, clock):
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+    assert _entity_id(hass, entry, "binary_sensor", suffix) is None
+
+    # A later server release can restore a check with the same slug. The
+    # add-once tracker must forget the old ID so it is registered again.
+    world.doctor = DOCTOR
+    clock.advance(301)
+    with patched(world), patch(CLOCK_PATH, clock):
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+    assert _entity_id(hass, entry, "binary_sensor", suffix) is not None
+
+
 async def test_spool_weight_and_low_filament(hass: HomeAssistant):
     """Slot 2 (500 g of 1000 g) gets a weight sensor and a quiet alert."""
     world = World()

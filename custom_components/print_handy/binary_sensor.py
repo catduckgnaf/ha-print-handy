@@ -12,6 +12,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntityDescription,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import PrintHandyConfigEntry
@@ -107,7 +108,30 @@ async def async_setup_entry(
                     )
         return entities
 
-    async_add_entities_as_known(coordinator, entry, async_add_entities, build)
+    def prune_retired_doctor_checks(added: set[str]) -> None:
+        # A failed hub poll reuses the last snapshot. Only prune on healthy
+        # hub data; temporary network failures must not delete entities.
+        if coordinator.data is None or not coordinator.hub_available:
+            return
+        prefix = instance_unique_id(coordinator, "doctor:")
+        active = {
+            instance_unique_id(coordinator, f"doctor:{check.slug}")
+            for check in coordinator.data.instance.doctor_checks
+        }
+        registry = er.async_get(hass)
+        for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
+            if (
+                entity.domain == "binary_sensor"
+                and entity.unique_id.startswith(prefix)
+                and entity.unique_id not in active
+            ):
+                registry.async_remove(entity.entity_id)
+                added.discard(entity.unique_id)
+
+    async_add_entities_as_known(
+        coordinator, entry, async_add_entities, build,
+        prune=prune_retired_doctor_checks,
+    )
 
 
 class PrintHandyInstanceBinarySensor(PrintHandyEntity, BinarySensorEntity):
